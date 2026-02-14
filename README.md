@@ -22,5 +22,5 @@ As a node operator, relying solely on third-party explorers for monitoring is ri
 
 ### 1. Clone the Repository
 ```bash
-git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
+git clone https://github.com/bozdemir52/monad-node-watchdog.git
 cd monad-node-watchdog
