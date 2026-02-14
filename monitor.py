@@ -1,9 +1,3 @@
----
-
-### 2. Dosya: `monitor.py`
-*(Bu kodda artık şifre yok, şifreyi `config.py` dosyasından çekecek. Böylece GitHub'a atsan da güvendesin.)*
-
-```python
 import requests
 import time
 import datetime
@@ -13,7 +7,7 @@ import sys
 try:
     import config
 except ImportError:
-    print("❌ ERROR: config.py not found! Please rename 'config.py.example' to 'config.py' and fill in your details.")
+    print("❌ ERROR: config.py not found!")
     sys.exit(1)
 
 def send_telegram_alert(message):
@@ -29,37 +23,33 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"⚠️ Telegram Error: {e}")
 
-def check_node():
-    """Checks the local node status via RPC."""
+def get_eth_block_height():
+    """Fetches block height from Ethereum RPC (Port 8080)."""
+    payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
     try:
-        response = requests.get(config.NODE_RPC_URL, timeout=5)
+        response = requests.post(config.NODE_RPC_URL, json=payload, timeout=5)
         response.raise_for_status()
         data = response.json()
-        
-        result = data['result']
-        sync_info = result['sync_info']
-        node_info = result['node_info']
-        
-        latest_block_height = int(sync_info['latest_block_height'])
-        catching_up = sync_info['catching_up']
-        moniker = node_info['moniker']
-        
-        # Log to terminal
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {moniker} | Height: {latest_block_height} | Sync: {'CATCHING UP' if catching_up else 'OK'}")
-        
-        return {
-            "height": latest_block_height,
-            "catching_up": catching_up,
-            "moniker": moniker
-        }
-
+        if "result" in data:
+            return int(data["result"], 16) # Hex to Int conversion
+        return None
     except Exception as e:
         print(f"❌ RPC Connection Error: {e}")
         return None
 
+def check_node():
+    """Decides which check to run based on config."""
+    height = get_eth_block_height()
+    
+    if height is not None:
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Node OK | Height: {height}")
+        return {"height": height}
+    
+    return None
+
 def main():
-    print("🛡️ Monad Node Watchdog Started...")
-    send_telegram_alert("🚀 *Monad Watchdog Active!*\nMonitoring started successfully.")
+    print("🛡️ Monad Node Watchdog (EVM Mode) Started...")
+    send_telegram_alert("🚀 *Monad Watchdog Active (EVM Mode)!*\nMonitoring started via Port 8080.")
     
     last_height = 0
     stuck_counter = 0
@@ -68,21 +58,19 @@ def main():
         status = check_node()
         
         if status is None:
-            send_telegram_alert("🚨 *CRITICAL: Node Unreachable!*\nCheck your server or RPC settings.")
+            send_telegram_alert("🚨 *CRITICAL: Node Unreachable!*\nRPC (8080) is not responding.")
         else:
-            # 1. Sync Check
-            if status['catching_up']:
-                send_telegram_alert(f"⚠️ *WARNING: Node Catching Up!*\nCurrent Height: {status['height']}")
+            current_height = status['height']
             
-            # 2. Stall Check (Has the block height changed?)
-            if status['height'] == last_height:
+            # Stall Check (Has the block height changed?)
+            if current_height == last_height and current_height > 0:
                 stuck_counter += 1
-                if stuck_counter >= 3: # Alert after 3 consecutive failures (approx 3 mins)
-                    send_telegram_alert(f"🛑 *ALERT: Node STUCK!*\nHeight: {status['height']}\nNo new blocks for 3 minutes.")
+                if stuck_counter >= 3: # 3 minutes stuck
+                    send_telegram_alert(f"🛑 *ALERT: Node STUCK!*\nHeight: {current_height}\nNo new blocks for 3 minutes.")
             else:
                 stuck_counter = 0 
             
-            last_height = status['height']
+            last_height = current_height
             
         time.sleep(config.CHECK_INTERVAL)
 
