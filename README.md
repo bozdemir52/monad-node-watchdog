@@ -37,10 +37,11 @@ pip3 install requests
 3. Configuration
 Rename the example config file and enter your details:
 
-Bash
+```Bash
 
 mv config.py.example config.py
 nano config.py
+```
 Settings to edit in config.py:
 
 TELEGRAM_BOT_TOKEN: Get this from @BotFather.
@@ -53,13 +54,15 @@ NODE_RPC_URL: Usually http://localhost:8080 (for EVM) or http://localhost:26657 
 To keep the bot running even after you disconnect from the server, use screen.
 
 1. Create a New Session
-Bash
+```Bash
 
 screen -S watchdog
+```
 2. Start the Script
-Bash
+```Bash
 
 python3 monitor.py
+```
 You should see: "🛡️ Monad Node Watchdog Started..."
 
 3. Detach (Leave it running)
@@ -73,9 +76,10 @@ Press Ctrl + A, then release and press D.
 View Logs (Re-attach)
 To check if the bot is still running or to see logs:
 
-Bash
+```Bash
 
 screen -r watchdog
+```
 Stop the Bot
 Re-attach to the screen: screen -r watchdog
 
