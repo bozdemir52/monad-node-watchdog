@@ -24,7 +24,8 @@ As a node operator, relying solely on third-party explorers for monitoring is ri
 Download the script to your server:
 ```bash
 git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
-cd monad-node-watchdog```
+cd monad-node-watchdog
+```
 
 2. Install Requirements
 Install the necessary Python library:
