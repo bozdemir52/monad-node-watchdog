@@ -18,9 +18,64 @@ As a node operator, relying solely on third-party explorers for monitoring is ri
 
 ---
 
-## 🚀 Installation & Usage
+# 🚀 Installation & Usage
 
 ### 1. Clone the Repository
+Download the script to your server:
 ```bash
-git clone https://github.com/bozdemir52/monad-node-watchdog.git
+git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
 cd monad-node-watchdog
+2. Install Requirements
+Install the necessary Python library:
+
+Bash
+
+pip3 install requests
+3. Configuration
+Rename the example config file and enter your details:
+
+Bash
+
+mv config.py.example config.py
+nano config.py
+Settings to edit in config.py:
+
+TELEGRAM_BOT_TOKEN: Get this from @BotFather.
+
+TELEGRAM_CHAT_ID: Get this from @userinfobot.
+
+NODE_RPC_URL: Usually http://localhost:8080 (for EVM) or http://localhost:26657 (for CometBFT).
+
+🛠️ Running in Background (Persistent)
+To keep the bot running even after you disconnect from the server, use screen.
+
+1. Create a New Session
+Bash
+
+screen -S watchdog
+2. Start the Script
+Bash
+
+python3 monitor.py
+You should see: "🛡️ Monad Node Watchdog Started..."
+
+3. Detach (Leave it running)
+To exit the screen without stopping the bot:
+
+Press Ctrl + A, then release and press D.
+
+(You will be returned to your main terminal, but the bot continues running in the background.)
+
+🔄 Management
+View Logs (Re-attach)
+To check if the bot is still running or to see logs:
+
+Bash
+
+screen -r watchdog
+Stop the Bot
+Re-attach to the screen: screen -r watchdog
+
+Press Ctrl + C to stop the script.
+
+Type exit to close the screen session.
