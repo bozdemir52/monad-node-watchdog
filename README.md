@@ -30,9 +30,10 @@ cd monad-node-watchdog
 2. Install Requirements
 Install the necessary Python library:
 
-Bash
+```Bash
 
 pip3 install requests
+```
 3. Configuration
 Rename the example config file and enter your details:
 
