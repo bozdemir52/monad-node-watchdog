@@ -9,12 +9,15 @@
 ## 📖 Overview
 As a node operator, relying solely on third-party explorers for monitoring is risky. **Monad Node Watchdog** is a Python script designed to run locally alongside your node. It communicates directly with the RPC endpoint and sends instant **Telegram Alerts** if critical issues are detected.
 
-### ✨ Features
-* **Real-time Monitoring:** Checks block height and sync status every minute.
-* **Stall Detection:** Alerts if block production halts (node stuck).
-* **Sync Status:** Warns if the node falls behind the network (`catching_up` status).
-* **Lightweight:** Uses minimal system resources (ideal for bare metal or VPS).
-* **Privacy Focused:** No external data leaks; connects only to your local RPC and Telegram API.
+### ✨ **Features**
+
+* **Real-time Monitoring:** Checks block height and sync status continuously.
+* **🚀 TPS Tracking & Hype Alerts:** Monitors current Transactions Per Second (TPS) in real-time and triggers automatic hype alerts when network activity spikes (e.g., TPS > 500).
+* **⏰ Automated & On-Demand Reports:** Receive automatic status summaries every hour, or fetch instant data anytime using the `/status` command.
+* **Stall Detection:** Alerts you immediately if block production halts or the node gets stuck for more than 3 minutes.
+* **Sync Status:** Warns if the node falls behind the network.
+* **Lightweight:** Uses minimal system resources (ideal for bare-metal or VPS).
+* **Privacy Focused:** No external data leaks; connects only to your local RPC and the official Telegram API.
 
 ---
 
