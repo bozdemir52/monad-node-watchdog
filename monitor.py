@@ -1,26 +1,27 @@
+# -*- coding: utf-8 -*-
 import requests
 import time
 import datetime
 import sys
 
-# Ayarları config dosyasından al
+# Load config
 try:
     import config
 except ImportError:
-    print("❌ ERROR: config.py bulunamadı!")
+    print("🚨 [ERROR] config.py not found!")
     sys.exit(1)
 
-# --- AYARLAR ---
-CHECK_INTERVAL = 10  # 10 Saniyede bir Telegram'ı ve Node'u kontrol et
-AUTO_REPORT_INTERVAL = 4 * 60 * 60  # 4 Saatte bir otomatik rapor
+# --- SETTINGS ---
+CHECK_INTERVAL = 2  
+AUTO_REPORT_INTERVAL = 1 * 60 * 60  # 1 Hour automatic report
+TPS_THRESHOLD = 500  # Threshold for Hype Alert
 # ----------------
 
-# Global değişkenler
 start_time = time.time()
 last_update_id = None
+is_spiking = False
 
 def get_uptime():
-    """Botun ne kadar süredir çalıştığını hesaplar"""
     seconds = time.time() - start_time
     m, s = divmod(seconds, 60)
     h, m = divmod(m, 60)
@@ -28,135 +29,122 @@ def get_uptime():
     return f"{int(d)}d {int(h)}h {int(m)}m"
 
 def telegram_api(method, data=None):
-    """Telegram API çağrılarını yönetir"""
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/{method}"
     try:
         if data:
-            response = requests.post(url, data=data, timeout=10)
+            response = requests.post(url, data=data, timeout=5)
         else:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=5)
         return response.json()
-    except Exception as e:
-        print(f"⚠️ Telegram Hatası ({method}): {e}")
+    except Exception:
         return None
 
 def send_message(chat_id, text):
-    """Mesaj gönderir"""
-    data = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     telegram_api("sendMessage", data)
 
-def get_eth_block_height():
-    """8080 Portundan Blok Yüksekliğini Alır"""
-    payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
+def get_eth_block_details():
+    payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
     try:
         response = requests.post(config.NODE_RPC_URL, json=payload, timeout=5)
         response.raise_for_status()
         data = response.json()
-        if "result" in data:
-            return int(data["result"], 16)
-        return None
-    except Exception as e:
-        print(f"❌ RPC Bağlantı Hatası: {e}")
-        return None
+        if "result" in data and data["result"]:
+            height = int(data["result"]["number"], 16)
+            tx_count = len(data["result"]["transactions"])
+            return height, tx_count
+        return None, 0
+    except Exception:
+        return None, 0
 
-def create_status_message(height):
-    """Havalı durum raporunu oluşturur"""
+def create_status_message(height, tps):
     if height is None:
-        return "🚨 **HATA:** Node verisine ulaşılamıyor!"
+        return "🚨 *ERROR:* Cannot reach the Node!"
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%H:%M:%S')
     
-    # ITRocket benzeri, kopyalanabilir blok (monospace) tasarımı
     msg = (
-        "📊 **MONAD NODE DURUMU**\n"
-        f"🕐 `{now}`\n"
+        "📊 *MONAD NODE STATUS*\n"
+        f"🕰️ `{now}`\n"
         "-----------------------------\n"
-        f"🧱 **Blok Yüksekliği:** `{height}`\n"
-        f"⏳ **Uptime:** `{uptime}`\n"
-        f"📡 **Port:** `8080 (EVM)`\n"
-        f"✅ **Sync Durumu:** `Senkronize`\n"
+        f"🧱 *Block Height:* `{height}`\n"
+        f"⚡ *Current TPS:* `{tps}`\n"
+        f"⏳ *Uptime:* `{uptime}`\n"
+        f"📡 *Port:* `8080 (EVM)`\n"
+        f"✅ *Sync:* `Synchronized`\n"
         "-----------------------------\n"
-        "🤖 _/status yazarak güncelleyebilirsin._"
+        "🤖 _Type /status to update._"
     )
     return msg
 
 def check_updates():
-    """Telegram'dan gelen komutları (/status) kontrol eder"""
     global last_update_id
-    
-    # offset parametresi ile sadece yeni mesajları alıyoruz
-    params = {"timeout": 5}
+    params = {"timeout": 0}  # Zero delay fix to prevent missing blocks
     if last_update_id:
         params["offset"] = last_update_id + 1
         
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getUpdates"
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=5)
         data = response.json()
-        
-        if not data.get("ok"):
-            return
+        if not data.get("ok"): return
 
         for result in data.get("result", []):
             last_update_id = result["update_id"]
-            
-            # Mesaj var mı kontrol et
             if "message" in result and "text" in result["message"]:
                 text = result["message"]["text"]
                 chat_id = result["message"]["chat"]["id"]
                 
-                # Sadece bizim belirlediğimiz Chat ID'ye cevap ver (Güvenlik)
                 if str(chat_id) == str(config.TELEGRAM_CHAT_ID):
                     if text == "/start":
-                        send_message(chat_id, "👋 Merhaba! Ben Monad Bekçisi.\nDurumu görmek için **/status** yazabilirsin.")
+                        send_message(chat_id, "👋 Hello! I am your All-in-One Monad Watchdog.\nType */status* to see block height and TPS.")
                     elif text == "/status":
-                        send_message(chat_id, "🔄 Veriler çekiliyor...")
-                        height = get_eth_block_height()
-                        msg = create_status_message(height)
+                        send_message(chat_id, "🔄 Fetching data...")
+                        height, tps = get_eth_block_details()
+                        msg = create_status_message(height, tps)
                         send_message(chat_id, msg)
-
-    except Exception as e:
-        print(f"⚠️ Update Hatası: {e}")
+    except Exception:
+        pass
 
 def main():
-    print("🛡️ Monad Watchdog (İnteraktif Mod) Başlatıldı...")
-    send_message(config.TELEGRAM_CHAT_ID, "🚀 **Bot Başlatıldı!**\nKomut vermek için `/status` yazabilirsin.")
+    global is_spiking
+    print("🚀 [INFO] Monad All-in-One Watchdog started...")
+    send_message(config.TELEGRAM_CHAT_ID, "🚀 *Monad Watchdog Started!*\nType `/status` for info.")
     
     last_height = 0
     stuck_counter = 0
     last_report_time = time.time()
     
     while True:
-        # 1. Telegram Komutlarını Kontrol Et (ÖNEMLİ: Bu yeni kısım)
         check_updates()
-        
-        # 2. Node Durumunu Çek
-        current_height = get_eth_block_height()
+        current_height, current_tps = get_eth_block_details()
         
         if current_height is None:
-            # Sadece kritik hatada log bas, sürekli mesaj atıp spam yapma
-            print("❌ Node Cevap Vermiyor!")
+            pass 
         else:
-            # --- Otomatik Rapor Zamanı ---
-            if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height)
-                send_message(config.TELEGRAM_CHAT_ID, "⏰ **OTOMATİK RAPOR**\n" + msg)
-                last_report_time = time.time()
-
-            # --- Node Takıldı mı Kontrolü ---
-            if current_height == last_height and current_height > 0:
-                stuck_counter += 1
-                # Her döngü 10 saniye, 18 döngü = 3 dakika
-                if stuck_counter >= 18: 
-                    send_message(config.TELEGRAM_CHAT_ID, f"🛑 *ALARM: Node TAKILDI!*\nBlok: {current_height}\n3 dakikadır yeni blok yok.")
-                    stuck_counter = 0 # Alarmı sıfırla ki spam yapmasın
+            if current_height != last_height:
+                print(f"🧱 [Monad Monitor] Block: {current_height} | TX Count (TPS): {current_tps}")
+                
+                if current_tps > TPS_THRESHOLD and not is_spiking:
+                    is_spiking = True
+                    msg = f"🚀 *MONAD HYPE ALERT!*\n\nThe network is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`\n\nYour bare-metal node is processing like a beast! 💜"
+                    send_message(config.TELEGRAM_CHAT_ID, msg)
+                elif current_tps <= TPS_THRESHOLD:
+                    is_spiking = False
+                    
+                stuck_counter = 0
             else:
+                stuck_counter += 1
+
+            if stuck_counter >= 90: 
+                send_message(config.TELEGRAM_CHAT_ID, f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Please check your server!")
                 stuck_counter = 0 
+
+            if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
+                msg = create_status_message(current_height, current_tps)
+                send_message(config.TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n" + msg)
+                last_report_time = time.time()
             
             last_height = current_height
             
