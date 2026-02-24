@@ -6,18 +6,19 @@ import sys
 import psutil
 import subprocess
 import threading
+import re
 
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 NODE_RPC_URL = "http://localhost:8080"
-VALIDATOR_MONIKER = "VAL_MONIKER_HERE"
+VALIDATOR_MONIKER = "OshVanK"
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
 ALERT_DISK_THRESHOLD = 90
 ALERT_RAM_THRESHOLD = 90
-ALERT_TIMEOUT_THRESHOLD = 5  # Consecutive timeouts/missed blocks required to trigger an alert
+ALERT_TIMEOUT_THRESHOLD = 15  # Consecutive timeouts/missed blocks required to trigger an alert
 TPS_THRESHOLD = 500
 # ------------------------
 
@@ -71,17 +72,32 @@ def get_system_health():
     disk = psutil.disk_usage('/').percent
     return cpu, ram, disk
 
-def create_status_message(height, tps, cpu, ram, disk):
+# --- YENI: TrieDB Okuyucu ---
+def get_triedb_usage():
+    try:
+        # monad-status komutunu çalıştır
+        result = subprocess.run(['monad-status'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+        # Çıktı içinden 'used: XXX Gb (YY.YY%)' kısmındaki yüzdeyi çek
+        match = re.search(r'used:.*?\(([\d\.]+)%\)', result.stdout)
+        if match:
+            return float(match.group(1))
+    except Exception:
+        pass
+    return None
+# ----------------------------
+
+def create_status_message(height, tps, cpu, ram, disk, triedb_disk):
     if height is None:
         return "🚨 *ERROR:* Cannot reach the Node!"
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # Determine validator status emoji based on the timeout counter
     val_status = "✅ `Active / Signing`"
     if missed_block_counter > 0:
         val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
+        
+    triedb_text = f"`{triedb_disk}%`" if triedb_disk is not None else "`N/A`"
     
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
@@ -95,14 +111,15 @@ def create_status_message(height, tps, cpu, ram, disk):
         "**🖥️ Server Health (Hardware)**\n"
         f"🧠 *CPU Usage:* `{cpu}%`\n"
         f"💾 *RAM Usage:* `{ram}%`\n"
-        f"💽 *Disk Usage:* `{disk}%`\n"
+        f"💽 *OS Disk:* `{disk}%`\n"
+        f"🗄️ *Monad TrieDB:* {triedb_text}\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 _Type /status to update._"
     )
     return msg
 
-# --- NINJA LOG READER (BACKGROUND PROCESS) ---
+# --- NINJA LOG READER ---
 def monitor_logs():
     global missed_block_counter
     print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
@@ -115,17 +132,14 @@ def monitor_logs():
     for line in process.stdout:
         line_lower = line.lower()
         
-        # Catch only consensus or validator-related errors. Ignore trivial P2P or keepalive timeouts.
         if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
             missed_block_counter += 1
             print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
             
-        # Detect successful vote transmission or block creation to reset the counter.
         elif "sending vote" in line_lower or "committed state" in line_lower:
             if missed_block_counter > 0:
                 print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
             missed_block_counter = 0
-# --------------------------------------------
 
 def check_updates():
     global last_update_id
@@ -152,7 +166,8 @@ def check_updates():
                         send_message(chat_id, "🔄 Fetching dashboard...")
                         height, tps = get_eth_block_details()
                         cpu, ram, disk = get_system_health()
-                        msg = create_status_message(height, tps, cpu, ram, disk)
+                        triedb_disk = get_triedb_usage()
+                        msg = create_status_message(height, tps, cpu, ram, disk, triedb_disk)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -162,7 +177,6 @@ def main():
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
     send_message(TELEGRAM_CHAT_ID, "🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, and TPS. Type `/status`.")
     
-    # Start the log reader in the background as a separate thread
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
     
@@ -175,19 +189,22 @@ def main():
         check_updates()
         current_height, current_tps = get_eth_block_details()
         cpu, ram, disk = get_system_health()
+        triedb_disk = get_triedb_usage()
         
         # --- ALERTS: TIMEOUT / MISSED BLOCK ---
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
             send_message(TELEGRAM_CHAT_ID, f"🚨 **VALIDATOR ALERT** 🚨\n\nYour validator missed `{missed_block_counter}` consecutive blocks (Timeout)!\nCheck your node status immediately.")
-            missed_block_counter = 0  # Reset to prevent spamming
-            time.sleep(10) # Wait for 10 seconds
+            missed_block_counter = 0  
+            time.sleep(10) 
 
         # --- ALERTS: HARDWARE ---
         if time.time() - last_hardware_alert_time > 300: 
             alert_msg = ""
             if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU ALERT:* `{cpu}%`\n"
             if ram > ALERT_RAM_THRESHOLD: alert_msg += f"⚠️ *HIGH RAM ALERT:* `{ram}%`\n"
-            if disk > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *CRITICAL DISK ALERT:* `{disk}%`\n"
+            if disk > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *CRITICAL OS DISK ALERT:* `{disk}%`\n"
+            if triedb_disk is not None and triedb_disk > ALERT_DISK_THRESHOLD: 
+                alert_msg += f"🗄️🆘 *CRITICAL TRIEDB ALERT:* `{triedb_disk}%`\n"
                 
             if alert_msg:
                 send_message(TELEGRAM_CHAT_ID, f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
@@ -195,7 +212,7 @@ def main():
 
         if current_height is not None:
             if current_height != last_height:
-                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | Timeouts: {missed_block_counter}")
+                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | TrieDB: {triedb_disk}%")
                 
                 # HYPE ALERT
                 if current_tps > TPS_THRESHOLD and not is_spiking:
@@ -215,7 +232,7 @@ def main():
 
             # AUTOMATIC REPORT
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk)
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk, triedb_disk)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
