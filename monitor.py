@@ -18,7 +18,7 @@ VALIDATOR_MONIKER = "VAL_MONIKER_HERE"
 ALERT_CPU_THRESHOLD = 90
 ALERT_DISK_THRESHOLD = 90
 ALERT_RAM_THRESHOLD = 90
-ALERT_TIMEOUT_THRESHOLD = 15  # Consecutive timeouts/missed blocks required to trigger an alert
+ALERT_TIMEOUT_THRESHOLD = 5  # Consecutive timeouts/missed blocks required to trigger an alert
 TPS_THRESHOLD = 500
 # ------------------------
 
