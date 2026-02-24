@@ -1,4 +1,3 @@
-Markdown
 # 🛡️ Monad Node Watchdog
 
 A lightweight, self-hosted, all-in-one monitoring tool for Monad Node Operators.
