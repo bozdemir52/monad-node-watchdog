@@ -72,21 +72,45 @@ def get_system_health():
     disk = psutil.disk_usage('/').percent
     return cpu, ram, disk
 
-# --- YENI: TrieDB Okuyucu ---
-def get_triedb_usage():
+# --- YENI: Genisletilmis Monad Status Okuyucu ---
+def get_monad_status_details():
+    details = {
+        "triedb": None,
+        "sync_status": "Unknown",
+        "epoch": "N/A",
+        "round": "N/A"
+    }
     try:
-        # monad-status komutunu çalıştır
         result = subprocess.run(['monad-status'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-        # Çıktı içinden 'used: XXX Gb (YY.YY%)' kısmındaki yüzdeyi çek
-        match = re.search(r'used:.*?\(([\d\.]+)%\)', result.stdout)
-        if match:
-            return float(match.group(1))
+        lines = result.stdout.split('\n')
+        
+        in_consensus = False
+        for line in lines:
+            # Sadece consensus bolumundeki status, epoch ve round degerlerini al
+            if line.startswith('consensus:'):
+                in_consensus = True
+            elif line.startswith('statesync:') or line.startswith('rpc:'):
+                in_consensus = False
+            
+            if in_consensus:
+                if 'status:' in line:
+                    details["sync_status"] = line.split('status:')[1].strip()
+                elif 'epoch:' in line:
+                    details["epoch"] = line.split('epoch:')[1].strip()
+                elif 'round:' in line:
+                    details["round"] = line.split('round:')[1].strip()
+            
+            # TrieDB doluluk oranini yakala        
+            match = re.search(r'used:.*?\(([\d\.]+)%\)', line)
+            if match:
+                details["triedb"] = float(match.group(1))
+                
+        return details
     except Exception:
-        pass
-    return None
-# ----------------------------
+        return details
+# --------------------------------------------------
 
-def create_status_message(height, tps, cpu, ram, disk, triedb_disk):
+def create_status_message(height, tps, cpu, ram, disk, monad_details):
     if height is None:
         return "🚨 *ERROR:* Cannot reach the Node!"
     
@@ -97,7 +121,15 @@ def create_status_message(height, tps, cpu, ram, disk, triedb_disk):
     if missed_block_counter > 0:
         val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
         
+    triedb_disk = monad_details.get("triedb")
     triedb_text = f"`{triedb_disk}%`" if triedb_disk is not None else "`N/A`"
+    
+    sync_status = monad_details.get("sync_status", "Unknown")
+    epoch = monad_details.get("epoch", "N/A")
+    rnd = monad_details.get("round", "N/A")
+    
+    # Eger in-sync ise yesil, degilse (lagging vs) sari yansit
+    sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
     
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
@@ -106,6 +138,8 @@ def create_status_message(height, tps, cpu, ram, disk, triedb_disk):
         "**⛓️ Blockchain & Validator**\n"
         f"🧱 *Latest Block:* `{height}`\n"
         f"⚡ *Current TPS:* `{tps}`\n"
+        f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
+        f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
         f"✍️ *Validator Status:* {val_status}\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "**🖥️ Server Health (Hardware)**\n"
@@ -166,8 +200,8 @@ def check_updates():
                         send_message(chat_id, "🔄 Fetching dashboard...")
                         height, tps = get_eth_block_details()
                         cpu, ram, disk = get_system_health()
-                        triedb_disk = get_triedb_usage()
-                        msg = create_status_message(height, tps, cpu, ram, disk, triedb_disk)
+                        monad_details = get_monad_status_details()
+                        msg = create_status_message(height, tps, cpu, ram, disk, monad_details)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -189,7 +223,8 @@ def main():
         check_updates()
         current_height, current_tps = get_eth_block_details()
         cpu, ram, disk = get_system_health()
-        triedb_disk = get_triedb_usage()
+        monad_details = get_monad_status_details()
+        triedb_disk = monad_details.get("triedb")
         
         # --- ALERTS: TIMEOUT / MISSED BLOCK ---
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
@@ -232,7 +267,7 @@ def main():
 
             # AUTOMATIC REPORT
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk, triedb_disk)
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk, monad_details)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
