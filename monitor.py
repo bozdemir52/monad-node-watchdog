@@ -107,7 +107,6 @@ def monitor_logs():
     global missed_block_counter
     print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
     
-    # Read only new logs (-n 0) to avoid processing old data
     process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], 
                                stdout=subprocess.PIPE, 
                                stderr=subprocess.STDOUT, 
@@ -116,15 +115,15 @@ def monitor_logs():
     for line in process.stdout:
         line_lower = line.lower()
         
-        # Check if the validator missed a block or timed out
-        if "timeout" in line_lower or "missed" in line_lower:
+        # Catch only consensus or validator-related errors. Ignore trivial P2P or keepalive timeouts.
+        if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
             missed_block_counter += 1
-            print(f"⚠️ [WARN] Timeout detected! Streak: {missed_block_counter}")
+            print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
             
-        # If the node casts a successful 'vote', it has recovered; reset the counter
-        elif "sending vote" in line_lower:
+        # Detect successful vote transmission or block creation to reset the counter.
+        elif "sending vote" in line_lower or "committed state" in line_lower:
             if missed_block_counter > 0:
-                print(f"✅ [INFO] Validator recovered. Resetting timeout counter.")
+                print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
             missed_block_counter = 0
 # --------------------------------------------
 
