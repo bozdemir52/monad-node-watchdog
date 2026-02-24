@@ -1,19 +1,9 @@
-# Telegram Bot Settings
-TELEGRAM_BOT_TOKEN = "8532141223:AAFR3wzqpQOIaUT-wXUxhB2iE-VrX5Nqdrg"
-TELEGRAM_CHAT_ID = "5712826602"
-
-# Node RPC Settings
-# Eger 8080 portu (Eth RPC) kullaniyorsan burayi degistirme
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 NODE_RPC_URL = "http://localhost:8080"
 
-# Node Type: 'comet' (26657) veya 'eth' (8080)
-NODE_TYPE = "eth" 
-
-# Check Interval (in seconds)
-CHECK_INTERVAL = 60
-
-# --- YENI VALIDATOR VE DONANIM AYARLARI ---
-VALIDATOR_MONIKER = "pi69"  # Kendi Validatör ismini yaz
-ALERT_CPU_THRESHOLD = 90  # CPU %90'ı geçerse alarm ver
-ALERT_DISK_THRESHOLD = 90 # Disk %90'ı geçerse alarm ver
-ALERT_RAM_THRESHOLD = 90  # RAM %90'ı geçerse alarm ver
+# --- VALIDATOR AND HARDWARE SETTINGS ---
+VALIDATOR_MONIKER = "VAL_MONIKER_HERE"  # Enter your own Validator moniker
+ALERT_CPU_THRESHOLD = 90  # Alert if CPU usage exceeds 90%
+ALERT_DISK_THRESHOLD = 90 # Alert if Disk usage exceeds 90%
+ALERT_RAM_THRESHOLD = 90  # Alert if RAM usage exceeds 90%
