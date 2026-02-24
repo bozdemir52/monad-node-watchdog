@@ -2,7 +2,7 @@
 
 A lightweight, self-hosted, all-in-one monitoring tool for Monad Node Operators.
 
-![Monad Watchdog Status](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/status_screenshot_example.png) *(Note: You can upload your awesome Telegram screenshot to your repo and link it here!)*
+[Monad Watchdog Status](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/status_screenshot_example.png) *(Note: You can upload your awesome Telegram screenshot to your repo and link it here!)*
 
 📖 Overview
 As a node operator, relying solely on third-party explorers for monitoring is risky. **Monad Node Watchdog** is a Python script designed to run locally alongside your node. It communicates directly with the RPC endpoint, monitors system logs, checks hardware resources, and sends instant **Telegram Alerts** if critical issues are detected.
