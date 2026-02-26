@@ -1,21 +1,22 @@
+Markdown
 # 🛡️ Monad Node Watchdog
 
 A lightweight, self-hosted, all-in-one monitoring tool for Monad Node Operators.
 
-![Monad Watchdog Status](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/status.jpg) *(Note: You can upload your awesome Telegram screenshot to your repo and link it here!)*
+![Monad Watchdog Status](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/status.jpg)
 
-📖 Overview
+📖 **Overview**
 As a node operator, relying solely on third-party explorers for monitoring is risky. **Monad Node Watchdog** is a Python script designed to run locally alongside your node. It communicates directly with the RPC endpoint, monitors system logs, checks hardware resources, and sends instant **Telegram Alerts** if critical issues are detected.
 
 ## ✨ Features
 
-* **Real-time Blockchain Monitoring:** Checks block height and sync status continuously.
-* **🖥️ Server Health (Hardware) Tracking:** Monitors CPU, RAM, and Disk usage in real-time. Sends alerts if usage exceeds safe thresholds.
-* **🥷 Validator Log Reader:** Monitors `monad-bft` journal logs in the background. Detects missed blocks and timeouts immediately!
+* **Real-time Blockchain Monitoring:** Checks block height, **Sync Status** (🟢 in-sync or 🟡 lagging), **Epoch**, and **Round** continuously directly from the local `monad-status` CLI and RPC.
+* **🖥️ Server Health & Storage Tracking:** Monitors CPU, RAM, and OS Disk usage in real-time. **[NEW] Includes specialized tracking for Monad TrieDB capacity and usage!** Sends alerts if usage exceeds safe thresholds.
+* **🥷 Validator Log Reader:** Monitors `monad-bft` journal logs in the background. Detects missed blocks, failed proposals, and consensus timeouts immediately!
 * **🚀 TPS Tracking & Hype Alerts:** Monitors current Transactions Per Second (TPS) in real-time and triggers automatic hype alerts when network activity spikes (e.g., TPS > 500).
-* **⏰ Automated & On-Demand Reports:** Receive automatic status summaries, or fetch instant data anytime using the `/status` command in Telegram.
+* **⏰ Automated & On-Demand Reports:** Receive automatic status summaries, or fetch instant detailed data anytime using the `/status` command in Telegram.
 * **🛑 Stall Detection:** Alerts you immediately if block production halts or the node gets stuck for more than 3 minutes.
-* **Privacy Focused:** No external data leaks; connects only to your local RPC and the official Telegram API.
+* **Privacy Focused:** No external data leaks; connects only to your local node and the official Telegram API.
 
 ## 🚀 Installation & Usage
 
@@ -24,21 +25,18 @@ Download the script to your server:
 ```bash
 git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
 cd monad-node-watchdog
-```
 2. Install Requirements
 Install the necessary Python libraries (requests for API calls, psutil for hardware monitoring):
 
-```Bash
+Bash
 pip3 install requests psutil
-```
 3. Configuration
-Rename the example config file and enter your details:
+Rename the example config file and enter your details (or edit directly inside monitor.py depending on your setup):
 
-```Bash
+Bash
 mv config.py.example config.py
 nano config.py
-```
-Settings to edit in your config / script:
+Settings to edit:
 
 TELEGRAM_BOT_TOKEN: Get this from @BotFather.
 
@@ -55,14 +53,12 @@ To keep the bot running even after you disconnect from the server, use screen.
 
 Create a New Session:
 
-```Bash
+Bash
 screen -S watchdog
-```
 Start the Script:
 
-```Bash
+Bash
 python3 monitor.py
-```
 (You should see: "🚀 [INFO] Monad Ultimate Validator Watchdog started...")
 
 Detach (Leave it running):
@@ -74,13 +70,10 @@ Press Ctrl + A, then release and press D.
 View Logs (Re-attach):
 To check if the bot is still running or to see logs:
 
-```Bash
+Bash
 screen -r watchdog
-```
 Stop the Bot:
 
 Re-attach to the screen: screen -r watchdog
 
 Press Ctrl + C to stop the script.
-
-Type exit to close the screen session.
