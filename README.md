@@ -1,300 +1,86 @@
-# -*- coding: utf-8 -*-
-import requests
-import time
-import datetime
-import sys
-import psutil
-import subprocess
-import threading
-import re
+# 🛡️ Monad Node Watchdog
 
-# --- CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
-NODE_RPC_URL = "http://localhost:8080"
-VALIDATOR_MONIKER = "VAL_MONIKER_HERE"
+A lightweight, self-hosted, all-in-one monitoring tool for Monad Node Operators.
 
-# Alert Thresholds
-ALERT_CPU_THRESHOLD = 90
-ALERT_DISK_THRESHOLD = 90
-ALERT_RAM_THRESHOLD = 90
-ALERT_TIMEOUT_THRESHOLD = 5  # Consecutive timeouts/missed blocks required to trigger an alert
-TPS_THRESHOLD = 500
-# ------------------------
+![Monad Watchdog Status](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/status1.jpg) *(Note: You can upload your awesome Telegram screenshot to your repo and link it here!)*
 
-CHECK_INTERVAL = 2  
-AUTO_REPORT_INTERVAL = 1 * 60 * 60  
+📖 Overview
+As a node operator, relying solely on third-party explorers for monitoring is risky. **Monad Node Watchdog** is a Python script designed to run locally alongside your node. It communicates directly with the RPC endpoint, monitors system logs, checks hardware resources, and sends instant **Telegram Alerts** if critical issues are detected.
 
-start_time = time.time()
-last_update_id = None
-is_spiking = False
-missed_block_counter = 0  # Counter for the ninja log reader
+## ✨ Features
 
-def get_uptime():
-    seconds = time.time() - start_time
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    d, h = divmod(h, 24)
-    return f"{int(d)}d {int(h)}h {int(m)}m"
+* **Real-time Blockchain Monitoring:** Checks block height and sync status continuously.
+* **🖥️ Server Health (Hardware) Tracking:** Monitors CPU, RAM, and Disk usage in real-time. Sends alerts if usage exceeds safe thresholds.
+* **🥷 Validator Log Reader:** Monitors `monad-bft` journal logs in the background. Detects missed blocks and timeouts immediately!
+* **🚀 TPS Tracking & Hype Alerts:** Monitors current Transactions Per Second (TPS) in real-time and triggers automatic hype alerts when network activity spikes (e.g., TPS > 500).
+* **⏰ Automated & On-Demand Reports:** Receive automatic status summaries, or fetch instant data anytime using the `/status` command in Telegram.
+* **🛑 Stall Detection:** Alerts you immediately if block production halts or the node gets stuck for more than 3 minutes.
+* **Privacy Focused:** No external data leaks; connects only to your local RPC and the official Telegram API.
 
-def format_bytes(size):
-    """Bayt cinsinden veriyi okunabilir GB/TB formatina cevirir"""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size < 1024.0:
-            return f"{size:.2f} {unit}"
-        size /= 1024.0
+## 🚀 Installation & Usage
 
-def telegram_api(method, data=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
-    try:
-        if data:
-            response = requests.post(url, data=data, timeout=5)
-        else:
-            response = requests.get(url, timeout=5)
-        return response.json()
-    except Exception:
-        return None
+### 1. Clone the Repository
+Download the script to your server:
+```bash
+git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
+cd monad-node-watchdog
+```
+2. Install Requirements
+Install the necessary Python libraries (requests for API calls, psutil for hardware monitoring):
 
-def send_message(chat_id, text):
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    telegram_api("sendMessage", data)
+```Bash
+pip3 install requests psutil
+```
+3. Configuration
+Rename the example config file and enter your details:
 
-def get_eth_block_details():
-    payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
-    try:
-        response = requests.post(NODE_RPC_URL, json=payload, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        if "result" in data and data["result"]:
-            height = int(data["result"]["number"], 16)
-            tx_count = len(data["result"]["transactions"])
-            return height, tx_count
-        return None, 0
-    except Exception:
-        return None, 0
+```Bash
+mv config.py.example config.py
+nano config.py
+```
+Settings to edit in your config / script:
 
-def get_system_health():
-    cpu = psutil.cpu_percent(interval=0.1)
-    ram = psutil.virtual_memory().percent
-    
-    # Ana OS Diski detayli okuma
-    disk_usage = psutil.disk_usage('/')
-    disk_percent = disk_usage.percent
-    disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
-    
-    return cpu, ram, disk_percent, disk_str
+TELEGRAM_BOT_TOKEN: Get this from @BotFather.
 
-def get_monad_status_details():
-    details = {
-        "triedb_percent": None,
-        "triedb_str": "N/A",
-        "sync_status": "Unknown",
-        "epoch": "N/A",
-        "round": "N/A"
-    }
-    try:
-        result = subprocess.run(['monad-status'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-        lines = result.stdout.split('\n')
-        
-        in_consensus = False
-        capacity_str = ""
-        used_amount_str = ""
-        
-        for line in lines:
-            if line.startswith('consensus:'):
-                in_consensus = True
-            elif line.startswith('statesync:') or line.startswith('rpc:'):
-                in_consensus = False
-            
-            if in_consensus:
-                if 'status:' in line:
-                    details["sync_status"] = line.split('status:')[1].strip()
-                elif 'epoch:' in line:
-                    details["epoch"] = line.split('epoch:')[1].strip()
-                elif 'round:' in line:
-                    details["round"] = line.split('round:')[1].strip()
-            
-            # Kapasite ve Kullanim verilerini ayri ayri cekme
-            if 'capacity:' in line:
-                capacity_str = line.split('capacity:')[1].strip()
-                
-            if 'used:' in line and '%' in line:
-                match = re.search(r'used:\s*(.*?)\s*\(([\d\.]+)%\)', line)
-                if match:
-                    used_amount_str = match.group(1).strip()
-                    details["triedb_percent"] = float(match.group(2))
-        
-        # TrieDB icin şık gorunumlu stringi olustur
-        if capacity_str and used_amount_str and details["triedb_percent"] is not None:
-            details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
-        elif details["triedb_percent"] is not None:
-            details["triedb_str"] = f"{details['triedb_percent']}%"
-            
-        return details
-    except Exception:
-        return details
+TELEGRAM_CHAT_ID: Get this from @userinfobot.
 
-def create_status_message(height, tps, cpu, ram, disk_str, monad_details):
-    if height is None:
-        return "🚨 *ERROR:* Cannot reach the Node!"
-    
-    uptime = get_uptime()
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    val_status = "✅ `Active / Signing`"
-    if missed_block_counter > 0:
-        val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
-        
-    triedb_str = monad_details.get("triedb_str", "N/A")
-    sync_status = monad_details.get("sync_status", "Unknown")
-    epoch = monad_details.get("epoch", "N/A")
-    rnd = monad_details.get("round", "N/A")
-    
-    sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
-    
-    msg = (
-        f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
-        f"📅 `{now}`\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        "**⛓️ Blockchain & Validator**\n"
-        f"🧱 *Latest Block:* `{height}`\n"
-        f"⚡ *Current TPS:* `{tps}`\n"
-        f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
-        f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
-        f"✍️ *Validator Status:* {val_status}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        "**🖥️ Server Health (Hardware)**\n"
-        f"🧠 *CPU Usage:* `{cpu}%`\n"
-        f"💾 *RAM Usage:* `{ram}%`\n"
-        f"💽 *OS Disk:* `{disk_str}`\n"
-        f"🗄️ *Monad TrieDB:* `{triedb_str}`\n"
-        f"⏳ *Bot Uptime:* `{uptime}`\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        "🤖 _Type /status to update._"
-    )
-    return msg
+NODE_RPC_URL: Usually http://localhost:8080
 
-# --- NINJA LOG READER ---
-def monitor_logs():
-    global missed_block_counter
-    print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
-    
-    process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], 
-                               stdout=subprocess.PIPE, 
-                               stderr=subprocess.STDOUT, 
-                               text=True)
-    
-    for line in process.stdout:
-        line_lower = line.lower()
-        
-        if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
-            missed_block_counter += 1
-            print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
-            
-        elif "sending vote" in line_lower or "committed state" in line_lower:
-            if missed_block_counter > 0:
-                print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
-            missed_block_counter = 0
+VALIDATOR_MONIKER: Your node's name for the dashboard.
 
-def check_updates():
-    global last_update_id
-    params = {"timeout": 0}
-    if last_update_id:
-        params["offset"] = last_update_id + 1
-        
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    try:
-        response = requests.get(url, params=params, timeout=5)
-        data = response.json()
-        if not data.get("ok"): return
+ALERT_CPU_THRESHOLD, ALERT_RAM_THRESHOLD, ALERT_DISK_THRESHOLD: Customize your hardware alert limits (default is 90%).
 
-        for result in data.get("result", []):
-            last_update_id = result["update_id"]
-            if "message" in result and "text" in result["message"]:
-                text = result["message"]["text"]
-                chat_id = result["message"]["chat"]["id"]
-                
-                if str(chat_id) == str(TELEGRAM_CHAT_ID):
-                    if text == "/start":
-                        send_message(chat_id, "👋 Hello! I am your Ultimate Validator Watchdog.\nType */status* for detailed metrics.")
-                    elif text == "/status":
-                        send_message(chat_id, "🔄 Fetching dashboard...")
-                        height, tps = get_eth_block_details()
-                        cpu, ram, disk_percent, disk_str = get_system_health()
-                        monad_details = get_monad_status_details()
-                        msg = create_status_message(height, tps, cpu, ram, disk_str, monad_details)
-                        send_message(chat_id, msg)
-    except Exception:
-        pass
+🛠️ Running in Background (Persistent)
+To keep the bot running even after you disconnect from the server, use screen.
 
-def main():
-    global is_spiking, missed_block_counter
-    print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    send_message(TELEGRAM_CHAT_ID, "🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, and TPS. Type `/status`.")
-    
-    log_thread = threading.Thread(target=monitor_logs, daemon=True)
-    log_thread.start()
-    
-    last_height = 0
-    stuck_counter = 0
-    last_report_time = time.time()
-    last_hardware_alert_time = 0 
-    
-    while True:
-        check_updates()
-        current_height, current_tps = get_eth_block_details()
-        cpu, ram, disk_percent, disk_str = get_system_health()
-        monad_details = get_monad_status_details()
-        triedb_percent = monad_details.get("triedb_percent")
-        
-        # --- ALERTS: TIMEOUT / MISSED BLOCK ---
-        if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
-            send_message(TELEGRAM_CHAT_ID, f"🚨 **VALIDATOR ALERT** 🚨\n\nYour validator missed `{missed_block_counter}` consecutive blocks (Timeout)!\nCheck your node status immediately.")
-            missed_block_counter = 0  
-            time.sleep(10) 
+Create a New Session:
 
-        # --- ALERTS: HARDWARE ---
-        if time.time() - last_hardware_alert_time > 300: 
-            alert_msg = ""
-            if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU ALERT:* `{cpu}%`\n"
-            if ram > ALERT_RAM_THRESHOLD: alert_msg += f"⚠️ *HIGH RAM ALERT:* `{ram}%`\n"
-            if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *CRITICAL OS DISK ALERT:* `{disk_percent}%`\n"
-            if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
-                alert_msg += f"🗄️🆘 *CRITICAL TRIEDB ALERT:* `{triedb_percent}%`\n"
-                
-            if alert_msg:
-                send_message(TELEGRAM_CHAT_ID, f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
-                last_hardware_alert_time = time.time()
+```Bash
+screen -S watchdog
+```
+Start the Script:
 
-        if current_height is not None:
-            if current_height != last_height:
-                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | TrieDB: {triedb_percent}%")
-                
-                # HYPE ALERT
-                if current_tps > TPS_THRESHOLD and not is_spiking:
-                    is_spiking = True
-                    send_message(TELEGRAM_CHAT_ID, f"🚀 *MONAD HYPE ALERT!*\n\nNetwork is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`")
-                elif current_tps <= TPS_THRESHOLD:
-                    is_spiking = False
-                    
-                stuck_counter = 0
-            else:
-                stuck_counter += 1
+```Bash
+python3 monitor.py
+```
+(You should see: "🚀 [INFO] Monad Ultimate Validator Watchdog started...")
 
-            # STUCK ALERT
-            if stuck_counter >= 90: 
-                send_message(TELEGRAM_CHAT_ID, f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Check your node!")
-                stuck_counter = 0 
+Detach (Leave it running):
+To exit the screen without stopping the bot:
+Press Ctrl + A, then release and press D.
+(You will be returned to your main terminal, but the bot continues running in the background.)
 
-            # AUTOMATIC REPORT
-            if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, monad_details)
-                send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
-                last_report_time = time.time()
-            
-            last_height = current_height
-            
-        time.sleep(CHECK_INTERVAL)
+🔄 Management
+View Logs (Re-attach):
+To check if the bot is still running or to see logs:
 
-if __name__ == "__main__":
-    main()
+```Bash
+screen -r watchdog
+```
+Stop the Bot:
+
+Re-attach to the screen: screen -r watchdog
+
+Press Ctrl + C to stop the script.
+
+Type exit to close the screen session.
