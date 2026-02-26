@@ -37,6 +37,13 @@ def get_uptime():
     d, h = divmod(h, 24)
     return f"{int(d)}d {int(h)}h {int(m)}m"
 
+def format_bytes(size):
+    """Bayt cinsinden veriyi okunabilir GB/TB formatina cevirir"""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+
 def telegram_api(method, data=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
     try:
@@ -69,13 +76,18 @@ def get_eth_block_details():
 def get_system_health():
     cpu = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory().percent
-    disk = psutil.disk_usage('/').percent
-    return cpu, ram, disk
+    
+    # Ana OS Diski detayli okuma
+    disk_usage = psutil.disk_usage('/')
+    disk_percent = disk_usage.percent
+    disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
+    
+    return cpu, ram, disk_percent, disk_str
 
-# --- YENI: Genisletilmis Monad Status Okuyucu ---
 def get_monad_status_details():
     details = {
-        "triedb": None,
+        "triedb_percent": None,
+        "triedb_str": "N/A",
         "sync_status": "Unknown",
         "epoch": "N/A",
         "round": "N/A"
@@ -85,8 +97,10 @@ def get_monad_status_details():
         lines = result.stdout.split('\n')
         
         in_consensus = False
+        capacity_str = ""
+        used_amount_str = ""
+        
         for line in lines:
-            # Sadece consensus bolumundeki status, epoch ve round degerlerini al
             if line.startswith('consensus:'):
                 in_consensus = True
             elif line.startswith('statesync:') or line.startswith('rpc:'):
@@ -100,17 +114,27 @@ def get_monad_status_details():
                 elif 'round:' in line:
                     details["round"] = line.split('round:')[1].strip()
             
-            # TrieDB doluluk oranini yakala        
-            match = re.search(r'used:.*?\(([\d\.]+)%\)', line)
-            if match:
-                details["triedb"] = float(match.group(1))
+            # Kapasite ve Kullanim verilerini ayri ayri cekme
+            if 'capacity:' in line:
+                capacity_str = line.split('capacity:')[1].strip()
                 
+            if 'used:' in line and '%' in line:
+                match = re.search(r'used:\s*(.*?)\s*\(([\d\.]+)%\)', line)
+                if match:
+                    used_amount_str = match.group(1).strip()
+                    details["triedb_percent"] = float(match.group(2))
+        
+        # TrieDB icin şık gorunumlu stringi olustur
+        if capacity_str and used_amount_str and details["triedb_percent"] is not None:
+            details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
+        elif details["triedb_percent"] is not None:
+            details["triedb_str"] = f"{details['triedb_percent']}%"
+            
         return details
     except Exception:
         return details
-# --------------------------------------------------
 
-def create_status_message(height, tps, cpu, ram, disk, monad_details):
+def create_status_message(height, tps, cpu, ram, disk_str, monad_details):
     if height is None:
         return "🚨 *ERROR:* Cannot reach the Node!"
     
@@ -121,14 +145,11 @@ def create_status_message(height, tps, cpu, ram, disk, monad_details):
     if missed_block_counter > 0:
         val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
         
-    triedb_disk = monad_details.get("triedb")
-    triedb_text = f"`{triedb_disk}%`" if triedb_disk is not None else "`N/A`"
-    
+    triedb_str = monad_details.get("triedb_str", "N/A")
     sync_status = monad_details.get("sync_status", "Unknown")
     epoch = monad_details.get("epoch", "N/A")
     rnd = monad_details.get("round", "N/A")
     
-    # Eger in-sync ise yesil, degilse (lagging vs) sari yansit
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
     
     msg = (
@@ -145,8 +166,8 @@ def create_status_message(height, tps, cpu, ram, disk, monad_details):
         "**🖥️ Server Health (Hardware)**\n"
         f"🧠 *CPU Usage:* `{cpu}%`\n"
         f"💾 *RAM Usage:* `{ram}%`\n"
-        f"💽 *OS Disk:* `{disk}%`\n"
-        f"🗄️ *Monad TrieDB:* {triedb_text}\n"
+        f"💽 *OS Disk:* `{disk_str}`\n"
+        f"🗄️ *Monad TrieDB:* `{triedb_str}`\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 _Type /status to update._"
@@ -199,9 +220,9 @@ def check_updates():
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
                         height, tps = get_eth_block_details()
-                        cpu, ram, disk = get_system_health()
+                        cpu, ram, disk_percent, disk_str = get_system_health()
                         monad_details = get_monad_status_details()
-                        msg = create_status_message(height, tps, cpu, ram, disk, monad_details)
+                        msg = create_status_message(height, tps, cpu, ram, disk_str, monad_details)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -222,9 +243,9 @@ def main():
     while True:
         check_updates()
         current_height, current_tps = get_eth_block_details()
-        cpu, ram, disk = get_system_health()
+        cpu, ram, disk_percent, disk_str = get_system_health()
         monad_details = get_monad_status_details()
-        triedb_disk = monad_details.get("triedb")
+        triedb_percent = monad_details.get("triedb_percent")
         
         # --- ALERTS: TIMEOUT / MISSED BLOCK ---
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
@@ -237,9 +258,9 @@ def main():
             alert_msg = ""
             if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU ALERT:* `{cpu}%`\n"
             if ram > ALERT_RAM_THRESHOLD: alert_msg += f"⚠️ *HIGH RAM ALERT:* `{ram}%`\n"
-            if disk > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *CRITICAL OS DISK ALERT:* `{disk}%`\n"
-            if triedb_disk is not None and triedb_disk > ALERT_DISK_THRESHOLD: 
-                alert_msg += f"🗄️🆘 *CRITICAL TRIEDB ALERT:* `{triedb_disk}%`\n"
+            if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *CRITICAL OS DISK ALERT:* `{disk_percent}%`\n"
+            if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
+                alert_msg += f"🗄️🆘 *CRITICAL TRIEDB ALERT:* `{triedb_percent}%`\n"
                 
             if alert_msg:
                 send_message(TELEGRAM_CHAT_ID, f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
@@ -247,7 +268,7 @@ def main():
 
         if current_height is not None:
             if current_height != last_height:
-                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | TrieDB: {triedb_disk}%")
+                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | TrieDB: {triedb_percent}%")
                 
                 # HYPE ALERT
                 if current_tps > TPS_THRESHOLD and not is_spiking:
@@ -267,7 +288,7 @@ def main():
 
             # AUTOMATIC REPORT
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk, monad_details)
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, monad_details)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
