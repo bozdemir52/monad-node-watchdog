@@ -1,4 +1,3 @@
-Markdown
 # 🛡️ Monad Node Watchdog
 
 A lightweight, self-hosted, all-in-one monitoring tool for Monad Node Operators.
@@ -25,17 +24,20 @@ Download the script to your server:
 ```bash
 git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
 cd monad-node-watchdog
+```
 2. Install Requirements
 Install the necessary Python libraries (requests for API calls, psutil for hardware monitoring):
 
-Bash
+```Bash
 pip3 install requests psutil
+```
 3. Configuration
 Rename the example config file and enter your details (or edit directly inside monitor.py depending on your setup):
 
-Bash
+```Bash
 mv config.py.example config.py
 nano config.py
+```
 Settings to edit:
 
 TELEGRAM_BOT_TOKEN: Get this from @BotFather.
@@ -53,12 +55,14 @@ To keep the bot running even after you disconnect from the server, use screen.
 
 Create a New Session:
 
-Bash
+```Bash
 screen -S watchdog
+```
 Start the Script:
 
-Bash
+```Bash
 python3 monitor.py
+```
 (You should see: "🚀 [INFO] Monad Ultimate Validator Watchdog started...")
 
 Detach (Leave it running):
@@ -70,8 +74,9 @@ Press Ctrl + A, then release and press D.
 View Logs (Re-attach):
 To check if the bot is still running or to see logs:
 
-Bash
+```Bash
 screen -r watchdog
+```
 Stop the Bot:
 
 Re-attach to the screen: screen -r watchdog
