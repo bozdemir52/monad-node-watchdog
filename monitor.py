@@ -11,6 +11,8 @@ import re
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
+DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
+WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
 NODE_RPC_URL = "http://localhost:8080"
 VALIDATOR_MONIKER = "VAL_MONIKER_HERE"
 
@@ -38,7 +40,7 @@ def get_uptime():
     return f"{int(d)}d {int(h)}h {int(m)}m"
 
 def format_bytes(size):
-    """Bayt cinsinden veriyi okunabilir GB/TB formatina cevirir"""
+    """Converts data in bytes to a readable GB/TB format"""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024.0:
             return f"{size:.2f} {unit}"
@@ -56,8 +58,31 @@ def telegram_api(method, data=None):
         return None
 
 def send_message(chat_id, text):
+    """Sends a message only to Telegram (Used for command replies and automatic reports)"""
     data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     telegram_api("sendMessage", data)
+
+def send_discord_message(text):
+    """Sends a message only to Discord"""
+    if not DISCORD_WEBHOOK_URL: return
+    try:
+        data = {"content": f"🚨 **MONAD NODE ALERT | {VALIDATOR_MONIKER}** 🚨\n{text}"}
+        requests.post(DISCORD_WEBHOOK_URL, json=data, timeout=5)
+    except Exception as e:
+        print(f"[ERROR] Failed to send Discord message: {e}")
+
+def send_alert(text):
+    """Sends critical alerts to both Telegram and Discord simultaneously"""
+    send_message(TELEGRAM_CHAT_ID, text)
+    send_discord_message(text)
+
+def send_heartbeat():
+    """Sends an 'I am alive' signal (ping) to the external Heartbeat Server"""
+    if not WATCHDOG_SERVER_IP: return
+    try:
+        requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
+    except Exception:
+        pass # If the heartbeat server is down or unresponsive, fail silently and continue monitoring
 
 def get_eth_block_details():
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
@@ -77,7 +102,7 @@ def get_system_health():
     cpu = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory().percent
     
-    # Ana OS Diski detayli okuma
+    # Detailed OS Disk reading
     disk_usage = psutil.disk_usage('/')
     disk_percent = disk_usage.percent
     disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
@@ -114,7 +139,7 @@ def get_monad_status_details():
                 elif 'round:' in line:
                     details["round"] = line.split('round:')[1].strip()
             
-            # Kapasite ve Kullanim verilerini ayri ayri cekme
+            # Extract capacity and usage data separately
             if 'capacity:' in line:
                 capacity_str = line.split('capacity:')[1].strip()
                 
@@ -124,7 +149,7 @@ def get_monad_status_details():
                     used_amount_str = match.group(1).strip()
                     details["triedb_percent"] = float(match.group(2))
         
-        # TrieDB icin şık gorunumlu stringi olustur
+        # Create a formatted string for TrieDB
         if capacity_str and used_amount_str and details["triedb_percent"] is not None:
             details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
         elif details["triedb_percent"] is not None:
@@ -230,7 +255,9 @@ def check_updates():
 def main():
     global is_spiking, missed_block_counter
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    send_message(TELEGRAM_CHAT_ID, "🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, and TPS. Type `/status`.")
+    
+    # Send startup message to both Telegram and Discord
+    send_alert("🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, and TPS.")
     
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
@@ -249,7 +276,7 @@ def main():
         
         # --- ALERTS: TIMEOUT / MISSED BLOCK ---
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
-            send_message(TELEGRAM_CHAT_ID, f"🚨 **VALIDATOR ALERT** 🚨\n\nYour validator missed `{missed_block_counter}` consecutive blocks (Timeout)!\nCheck your node status immediately.")
+            send_alert(f"🚨 **VALIDATOR ALERT** 🚨\n\nYour validator missed `{missed_block_counter}` consecutive blocks (Timeout)!\nCheck your node status immediately.")
             missed_block_counter = 0  
             time.sleep(10) 
 
@@ -263,7 +290,7 @@ def main():
                 alert_msg += f"🗄️🆘 *CRITICAL TRIEDB ALERT:* `{triedb_percent}%`\n"
                 
             if alert_msg:
-                send_message(TELEGRAM_CHAT_ID, f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
+                send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
                 last_hardware_alert_time = time.time()
 
         if current_height is not None:
@@ -273,7 +300,7 @@ def main():
                 # HYPE ALERT
                 if current_tps > TPS_THRESHOLD and not is_spiking:
                     is_spiking = True
-                    send_message(TELEGRAM_CHAT_ID, f"🚀 *MONAD HYPE ALERT!*\n\nNetwork is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`")
+                    send_alert(f"🚀 *MONAD HYPE ALERT!*\n\nNetwork is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`")
                 elif current_tps <= TPS_THRESHOLD:
                     is_spiking = False
                     
@@ -283,16 +310,19 @@ def main():
 
             # STUCK ALERT
             if stuck_counter >= 90: 
-                send_message(TELEGRAM_CHAT_ID, f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Check your node!")
+                send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Check your node!")
                 stuck_counter = 0 
 
-            # AUTOMATIC REPORT
+            # AUTOMATIC REPORT (Goes only to Telegram to prevent Discord spam)
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
                 msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, monad_details)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
             last_height = current_height
+            
+        # HEARTBEAT (Send signal to the heartbeat server)
+        send_heartbeat()
             
         time.sleep(CHECK_INTERVAL)
 
