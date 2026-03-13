@@ -118,8 +118,8 @@ python3 heartbeat_server.py
 4. Link your Main Node to the Heartbeat Server:
 Go back to your Main Node Server, open monitor.py, and enter the IP address of your secondary server:
 
-Python
 WATCHDOG_SERVER_IP = "http://<YOUR_SECONDARY_SERVER_IP>:5000"
+
 Restart your monitor.py on the main node. It will now send a ping to the Heartbeat server every few seconds. If somebody pulls the plug on your node, you will know within 3 minutes!
 
 Press Ctrl + C to stop the script.
