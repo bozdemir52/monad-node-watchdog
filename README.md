@@ -82,4 +82,44 @@ Stop the Bot:
 
 Re-attach to the screen: screen -r watchdog
 
+## 🛡️ Optional: Heartbeat Server (Dead-Man's Switch)
+
+Relying on a local script is great, but what if your entire node server crashes or loses internet connection? Who alerts you then? 
+
+To solve this DevOps paradox, `monad-node-watchdog` includes a secondary **Heartbeat Server** architecture. By running `heartbeat_server.py` on a separate, cheap VPS (or any other server), it will constantly listen for "I am alive" pings from your main node. If the main node goes offline for more than 3 minutes, the Heartbeat Server will trigger a critical alert!
+
+### How to setup the Heartbeat Server:
+
+**1. On your Secondary Server (The Watcher):**
+Create the heartbeat file and install the required web framework (Flask):
+```bash
+# Download the heartbeat script
+wget [https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/heartbeat_server.py](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/heartbeat_server.py)
+
+# Install dependencies
+pip3 install flask requests
+```
+2. Configure the Heartbeat Server:
+Edit the heartbeat_server.py file and add your Telegram/Discord credentials so it knows where to send the critical alert:
+
+```Bash
+nano heartbeat_server.py
+```
+(Make sure to open port 5000 on your secondary server's firewall).
+
+3. Run the Heartbeat Server in the background:
+
+```Bash
+screen -S heartbeat
+python3 heartbeat_server.py
+```
+(Press Ctrl + A then D to detach and leave it running).
+
+4. Link your Main Node to the Heartbeat Server:
+Go back to your Main Node Server, open monitor.py, and enter the IP address of your secondary server:
+
+Python
+WATCHDOG_SERVER_IP = "http://<YOUR_SECONDARY_SERVER_IP>:5000"
+Restart your monitor.py on the main node. It will now send a ping to the Heartbeat server every few seconds. If somebody pulls the plug on your node, you will know within 3 minutes!
+
 Press Ctrl + C to stop the script.
