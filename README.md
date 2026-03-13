@@ -94,7 +94,7 @@ To solve this DevOps paradox, `monad-node-watchdog` includes a secondary **Heart
 Create the heartbeat file and install the required web framework (Flask):
 ```bash
 # Download the heartbeat script
-wget [https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/heartbeat_server.py](https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/heartbeat_server.py)
+wget https://raw.githubusercontent.com/bozdemir52/monad-node-watchdog/main/heartbeat_server.py
 
 # Install dependencies
 pip3 install flask requests
