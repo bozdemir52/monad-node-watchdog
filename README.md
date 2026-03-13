@@ -16,7 +16,7 @@ As a node operator, relying solely on third-party explorers for monitoring is ri
 * **⏰ Automated & On-Demand Reports:** Receive automatic status summaries, or fetch instant detailed data anytime using the `/status` command in Telegram.
 * **🛑 Stall Detection:** Alerts you immediately if block production halts or the node gets stuck for more than 3 minutes.
 * **Privacy Focused:** No external data leaks; connects only to your local node and the official Telegram API.
-* **Dead-Man's Switch (Heartbeat Server): Includes an optional secondary lightweight Flask server to detect complete node outages or network disconnections.
+* **Dead-Man's Switch (Heartbeat Server):** Includes an optional secondary lightweight Flask server to detect complete node outages or network disconnections.
 
 ## 🚀 Installation & Usage
 
