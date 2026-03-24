@@ -17,6 +17,7 @@ As a node operator, relying solely on third-party explorers for monitoring is ri
 * **🛑 Stall Detection:** Alerts you immediately if block production halts or the node gets stuck for more than 3 minutes.
 * **Privacy Focused:** No external data leaks; connects only to your local node and the official Telegram API.
 * **Dead-Man's Switch (Heartbeat Server):** Includes an optional secondary lightweight Flask server to detect complete node outages or network disconnections.
+* **💽 Real-Time Disk I/O Monitoring (MIP-8 Ready):** Tracks live disk read/write speeds (MB/s) to help you observe the performance impact of Monad's Page-ified Storage and monitor I/O bottlenecks during massive TPS spikes.
 
 ## 🚀 Installation & Usage
 
