@@ -26,11 +26,16 @@ TPS_THRESHOLD = 500
 
 CHECK_INTERVAL = 2  
 AUTO_REPORT_INTERVAL = 1 * 60 * 60  
+HYPE_COOLDOWN = 120 # 2 Minutes cooldown for Hype Alerts (Spam Protection)
 
 start_time = time.time()
 last_update_id = None
 is_spiking = False
 missed_block_counter = 0  # Counter for the ninja log reader
+
+# Disk I/O tracking variables
+last_io_counters = None
+last_io_time = 0
 
 def get_uptime():
     seconds = time.time() - start_time
@@ -82,7 +87,7 @@ def send_heartbeat():
     try:
         requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
     except Exception:
-        pass # If the heartbeat server is down or unresponsive, fail silently and continue monitoring
+        pass 
 
 def get_eth_block_details():
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
@@ -99,6 +104,8 @@ def get_eth_block_details():
         return None, 0
 
 def get_system_health():
+    global last_io_counters, last_io_time
+    
     cpu = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory().percent
     
@@ -107,7 +114,23 @@ def get_system_health():
     disk_percent = disk_usage.percent
     disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
     
-    return cpu, ram, disk_percent, disk_str
+    # Disk I/O Speed Calculation (MB/s)
+    io_counters = psutil.disk_io_counters()
+    current_time = time.time()
+    read_speed_mb = 0.0
+    write_speed_mb = 0.0
+    
+    if last_io_counters and (current_time - last_io_time) > 0:
+        time_diff = current_time - last_io_time
+        read_speed_mb = (io_counters.read_bytes - last_io_counters.read_bytes) / time_diff / (1024 * 1024)
+        write_speed_mb = (io_counters.write_bytes - last_io_counters.write_bytes) / time_diff / (1024 * 1024)
+        
+    last_io_counters = io_counters
+    last_io_time = current_time
+    
+    disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
+    
+    return cpu, ram, disk_percent, disk_str, disk_io_str
 
 def get_monad_status_details():
     details = {
@@ -159,7 +182,7 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(height, tps, cpu, ram, disk_str, monad_details):
+def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details):
     if height is None:
         return "🚨 *ERROR:* Cannot reach the Node!"
     
@@ -192,6 +215,7 @@ def create_status_message(height, tps, cpu, ram, disk_str, monad_details):
         f"🧠 *CPU Usage:* `{cpu}%`\n"
         f"💾 *RAM Usage:* `{ram}%`\n"
         f"💽 *OS Disk:* `{disk_str}`\n"
+        f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
         f"🗄️ *Monad TrieDB:* `{triedb_str}`\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
@@ -245,9 +269,9 @@ def check_updates():
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
                         height, tps = get_eth_block_details()
-                        cpu, ram, disk_percent, disk_str = get_system_health()
+                        cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
                         monad_details = get_monad_status_details()
-                        msg = create_status_message(height, tps, cpu, ram, disk_str, monad_details)
+                        msg = create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -256,8 +280,7 @@ def main():
     global is_spiking, missed_block_counter
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
     
-    # Send startup message to both Telegram and Discord
-    send_alert("🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, and TPS.")
+    send_alert("🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, Disk I/O, and TPS.")
     
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
@@ -266,11 +289,12 @@ def main():
     stuck_counter = 0
     last_report_time = time.time()
     last_hardware_alert_time = 0 
+    last_hype_alert_time = 0 # Timer for Hype Cooldown
     
     while True:
         check_updates()
         current_height, current_tps = get_eth_block_details()
-        cpu, ram, disk_percent, disk_str = get_system_health()
+        cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
         
@@ -295,12 +319,14 @@ def main():
 
         if current_height is not None:
             if current_height != last_height:
-                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | TrieDB: {triedb_percent}%")
+                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | I/O: {disk_io_str}")
                 
-                # HYPE ALERT
-                if current_tps > TPS_THRESHOLD and not is_spiking:
-                    is_spiking = True
-                    send_alert(f"🚀 *MONAD HYPE ALERT!*\n\nNetwork is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`")
+                # HYPE ALERT with 2-minute cooldown
+                if current_tps > TPS_THRESHOLD:
+                    if time.time() - last_hype_alert_time > HYPE_COOLDOWN:
+                        is_spiking = True
+                        send_alert(f"🚀 *MONAD HYPE ALERT!*\n\nNetwork is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`\n⚙️ Disk I/O: `{disk_io_str}`")
+                        last_hype_alert_time = time.time()
                 elif current_tps <= TPS_THRESHOLD:
                     is_spiking = False
                     
@@ -313,15 +339,15 @@ def main():
                 send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Check your node!")
                 stuck_counter = 0 
 
-            # AUTOMATIC REPORT (Goes only to Telegram to prevent Discord spam)
+            # AUTOMATIC REPORT
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, monad_details)
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
             last_height = current_height
             
-        # HEARTBEAT (Send signal to the heartbeat server)
+        # HEARTBEAT
         send_heartbeat()
             
         time.sleep(CHECK_INTERVAL)
