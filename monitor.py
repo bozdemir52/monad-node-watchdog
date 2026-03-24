@@ -14,7 +14,7 @@ TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
 WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
 NODE_RPC_URL = "http://localhost:8080"
-VALIDATOR_MONIKER = "VAL_MONIKER_HERE"
+VALIDATOR_MONIKER = "YOUR_MONIKER_HERE"
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
@@ -31,7 +31,7 @@ HYPE_COOLDOWN = 120 # 2 Minutes cooldown for Hype Alerts (Spam Protection)
 start_time = time.time()
 last_update_id = None
 is_spiking = False
-missed_block_counter = 0  # Counter for the ninja log reader
+missed_block_counter = 0  
 
 # Disk I/O tracking variables
 last_io_counters = None
@@ -45,7 +45,6 @@ def get_uptime():
     return f"{int(d)}d {int(h)}h {int(m)}m"
 
 def format_bytes(size):
-    """Converts data in bytes to a readable GB/TB format"""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024.0:
             return f"{size:.2f} {unit}"
@@ -63,12 +62,10 @@ def telegram_api(method, data=None):
         return None
 
 def send_message(chat_id, text):
-    """Sends a message only to Telegram (Used for command replies and automatic reports)"""
     data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     telegram_api("sendMessage", data)
 
 def send_discord_message(text):
-    """Sends a message only to Discord"""
     if not DISCORD_WEBHOOK_URL: return
     try:
         data = {"content": f"🚨 **MONAD NODE ALERT | {VALIDATOR_MONIKER}** 🚨\n{text}"}
@@ -77,12 +74,10 @@ def send_discord_message(text):
         print(f"[ERROR] Failed to send Discord message: {e}")
 
 def send_alert(text):
-    """Sends critical alerts to both Telegram and Discord simultaneously"""
     send_message(TELEGRAM_CHAT_ID, text)
     send_discord_message(text)
 
 def send_heartbeat():
-    """Sends an 'I am alive' signal (ping) to the external Heartbeat Server"""
     if not WATCHDOG_SERVER_IP: return
     try:
         requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
@@ -109,12 +104,10 @@ def get_system_health():
     cpu = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory().percent
     
-    # Detailed OS Disk reading
     disk_usage = psutil.disk_usage('/')
     disk_percent = disk_usage.percent
     disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
     
-    # Disk I/O Speed Calculation (MB/s)
     io_counters = psutil.disk_io_counters()
     current_time = time.time()
     read_speed_mb = 0.0
@@ -162,7 +155,6 @@ def get_monad_status_details():
                 elif 'round:' in line:
                     details["round"] = line.split('round:')[1].strip()
             
-            # Extract capacity and usage data separately
             if 'capacity:' in line:
                 capacity_str = line.split('capacity:')[1].strip()
                 
@@ -172,7 +164,6 @@ def get_monad_status_details():
                     used_amount_str = match.group(1).strip()
                     details["triedb_percent"] = float(match.group(2))
         
-        # Create a formatted string for TrieDB
         if capacity_str and used_amount_str and details["triedb_percent"] is not None:
             details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
         elif details["triedb_percent"] is not None:
@@ -223,7 +214,6 @@ def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_de
     )
     return msg
 
-# --- NINJA LOG READER ---
 def monitor_logs():
     global missed_block_counter
     print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
@@ -280,7 +270,7 @@ def main():
     global is_spiking, missed_block_counter
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
     
-    send_alert("🚀 *Watchdog Started!*\nMonitoring Hardware, Validator Logs, Disk I/O, and TPS.")
+    send_alert("🚀 *Watchdog Started!*\nMonitoring Hardware, Logs, Disk I/O, and TPS.")
     
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
@@ -289,7 +279,7 @@ def main():
     stuck_counter = 0
     last_report_time = time.time()
     last_hardware_alert_time = 0 
-    last_hype_alert_time = 0 # Timer for Hype Cooldown
+    last_hype_alert_time = 0 
     
     while True:
         check_updates()
@@ -321,7 +311,7 @@ def main():
             if current_height != last_height:
                 print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | I/O: {disk_io_str}")
                 
-                # HYPE ALERT with 2-minute cooldown
+                # HYPE ALERT
                 if current_tps > TPS_THRESHOLD:
                     if time.time() - last_hype_alert_time > HYPE_COOLDOWN:
                         is_spiking = True
@@ -339,7 +329,7 @@ def main():
                 send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Check your node!")
                 stuck_counter = 0 
 
-            # AUTOMATIC REPORT
+            # AUTOMATIC REPORT 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
                 msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
