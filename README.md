@@ -19,6 +19,29 @@ As a node operator, relying solely on third-party explorers for monitoring is ri
 * **Dead-Man's Switch (Heartbeat Server):** Includes an optional secondary lightweight Flask server to detect complete node outages or network disconnections.
 * **💽 Real-Time Disk I/O Monitoring (MIP-8 Ready):** Tracks live disk read/write speeds (MB/s) to help you observe the performance impact of Monad's Page-ified Storage and monitor I/O bottlenecks during massive TPS spikes.
 
+## 🚀 Roadmap & Future Plans
+
+Monad Watchdog is actively evolving! Here are the upcoming features we plan to integrate to make node monitoring even more seamless and proactive:
+
+- [ ] **🔔 Official "Color-Coded" Alerts Integration**
+  - Listening to Monad Foundation's official webhooks/APIs.
+  - Automatic Telegram push notifications for `Code Red` (Critical/Immediate Action) and `Code Orange` (Update Required) network events.
+
+- [ ] **🌍 Datacenter & Regional Outage Radar**
+  - Cross-referencing local node issues with broader datacenter (e.g., Hetzner, AWS) or regional status.
+  - Helps quickly answer: "Is it just my node, or is the whole provider down?"
+
+- [ ] **🔌 Peer & Connectivity Health Monitor**
+  - Live tracking of connected peers.
+  - Proactive alerts if the peer count drops below a critical threshold to prevent silent forking or network isolation.
+
+- [ ] **🧱 Active Set & Missed Block Tracker**
+  - Continuous monitoring of validator active set status.
+  - Instant alerts for consecutive missed signing tasks to prevent performance drops or potential jailing.
+
+- [ ] **📈 Proactive Hardware Spike Alarms**
+  - Moving beyond the manual `/status` command: The bot will autonomously push an alert if server resources (CPU, RAM, or Disk I/O) hit critical levels (e.g., >85%) during massive TPS spikes.
+
 ## 🚀 Installation & Usage
 
 ### 1. Clone the Repository
