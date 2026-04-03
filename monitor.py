@@ -13,14 +13,21 @@ TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
 WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (Leave empty if not using)
 NODE_RPC_URL = "http://localhost:8080" # BURAYI KONTROL ET (8080 veya 8545 olabilir)
-VALIDATOR_MONIKER = "YOUR_MONIKER_HERE"  
-NODE_RPC_URL = "http://localhost:8080"
 VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
 # --- API TRACKING ---
 VALIDATOR_ADDRESS = "YOUR_WALLET_ADDRESS"
 VALIDATOR_API_URL = f"https://monad-api.monadvision.com/testnet/api/validator/detail?validatorAddress={VALIDATOR_ADDRESS}"
 NETWORK_API_URL = "https://monad-api.monadvision.com/testnet/api/overview"
+
+# BROWSER SPOOFING (Anti-Bot Bypass)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://monadvision.com",
+    "Referer": "https://monadvision.com/"
+}
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
@@ -80,7 +87,8 @@ def send_alert(text):
 # --- EXPLORER API DATA ---
 def get_validator_api_details():
     try:
-        response = requests.get(VALIDATOR_API_URL, timeout=5)
+        response = requests.get(VALIDATOR_API_URL, headers=HEADERS, timeout=10)
+        response.raise_for_status() 
         data = response.json()
         if data.get("code") == 0 and "result" in data:
             res = data["result"]
@@ -91,13 +99,14 @@ def get_validator_api_details():
                 "delegators": int(res.get("delegators", 0)),
                 "apy": float(res.get("apy", 0))
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[API ERROR] Validator Fetch Failed: {e}")
     return None
 
 def get_network_overview():
     try:
-        response = requests.get(NETWORK_API_URL, timeout=5)
+        response = requests.get(NETWORK_API_URL, headers=HEADERS, timeout=10)
+        response.raise_for_status()
         data = response.json()
         if data.get("code") == 0 and "result" in data:
             res = data["result"]
@@ -107,8 +116,8 @@ def get_network_overview():
                 "validators": int(res.get("totalValidators", 0)),
                 "peak_tps": int(res.get("peakTPS", 0))
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[API ERROR] Network Fetch Failed: {e}")
     return None
 # ---------------------------------------------
 
@@ -137,235 +146,4 @@ def get_system_health():
     io_counters = psutil.disk_io_counters()
     current_time = time.time()
     read_speed_mb = 0.0
-    write_speed_mb = 0.0
-    
-    if last_io_counters and (current_time - last_io_time) > 0:
-        time_diff = current_time - last_io_time
-        read_speed_mb = (io_counters.read_bytes - last_io_counters.read_bytes) / time_diff / (1024 * 1024)
-        write_speed_mb = (io_counters.write_bytes - last_io_counters.write_bytes) / time_diff / (1024 * 1024)
-        
-    last_io_counters = io_counters
-    last_io_time = current_time
-    disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
-    
-    return cpu, ram, disk_percent, disk_str, disk_io_str
-
-def get_monad_status_details():
-    details = {"triedb_percent": None, "triedb_str": "N/A", "sync_status": "Unknown", "epoch": "N/A", "round": "N/A"}
-    try:
-        result = subprocess.run(['monad-status'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-        lines = result.stdout.split('\n')
-        in_consensus = False
-        capacity_str = ""
-        used_amount_str = ""
-        
-        for line in lines:
-            if line.startswith('consensus:'): in_consensus = True
-            elif line.startswith('statesync:') or line.startswith('rpc:'): in_consensus = False
-            
-            if in_consensus:
-                if 'status:' in line: details["sync_status"] = line.split('status:')[1].strip()
-                elif 'epoch:' in line: details["epoch"] = line.split('epoch:')[1].strip()
-                elif 'round:' in line: details["round"] = line.split('round:')[1].strip()
-            
-            if 'capacity:' in line: capacity_str = line.split('capacity:')[1].strip()
-            if 'used:' in line and '%' in line:
-                match = re.search(r'used:\s*(.*?)\s*\(([\d\.]+)%\)', line)
-                if match:
-                    used_amount_str = match.group(1).strip()
-                    details["triedb_percent"] = float(match.group(2))
-        
-        if capacity_str and used_amount_str and details["triedb_percent"] is not None:
-            details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
-        elif details["triedb_percent"] is not None:
-            details["triedb_str"] = f"{details['triedb_percent']}%"
-        return details
-    except Exception:
-        return details
-
-def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data):
-    if local_height is None:
-        return "🚨 *ERROR:* Cannot reach the local Node RPC!"
-    
-    uptime = get_uptime()
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    val_status = "✅ `Active / Signing`"
-    if missed_block_counter > 0:
-        val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
-        
-    triedb_str = monad_details.get("triedb_str", "N/A")
-    sync_status = monad_details.get("sync_status", "Unknown")
-    epoch = monad_details.get("epoch", "N/A")
-    rnd = monad_details.get("round", "N/A")
-    
-    sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
-
-    # Network Block vs Local Block Comparison
-    network_height_str = ""
-    if net_data and net_data["latest_block"] > 0:
-        net_block = net_data["latest_block"]
-        diff = net_block - local_height
-        diff_str = f"(Behind: {diff})" if diff > 5 else "(Synced)"
-        network_height_str = f"\n🌍 *Network Block:* `{net_block}` {diff_str}"
-    
-    # Validator Data
-    if val_data:
-        stake_m = val_data['stake'] / 1000000
-        rewards = val_data['rewards']
-        session_earned = rewards - initial_rewards if initial_rewards is not None else 0.0
-        
-        val_section = (
-            "**🏆 Validator & Network Stats**\n"
-            f"💰 *Rewards (Unclaimed):* `{rewards:,.2f} MON`\n"
-            f"📈 *Session Earned:* `+{session_earned:,.4f} MON`\n"
-            f"💎 *Stake:* `{stake_m:,.2f}M` (`{val_data['power']}%` Power)\n"
-        )
-    else:
-        val_section = "**🏆 Validator Stats**\n⚠️ *API Unreachable*\n"
-
-    # Network Overview Data
-    if net_data:
-        val_section += (
-            f"🌐 *Total Vals:* `{net_data['validators']}` | *Peak TPS:* `{net_data['peak_tps']}`\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-        )
-    else:
-        val_section += "━━━━━━━━━━━━━━━━━━━━━\n"
-
-    msg = (
-        f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
-        f"📅 `{now}`\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        "**⛓️ Blockchain & Node**\n"
-        f"🧱 *Local Block:* `{local_height}`{network_height_str}\n"
-        f"⚡ *Current TPS:* `{tps}`\n"
-        f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
-        f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
-        f"✍️ *Node Status:* {val_status}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        + val_section +
-        "**🖥️ Server Health**\n"
-        f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
-        f"💽 *OS Disk:* `{disk_str}`\n"
-        f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
-        f"🗄️ *TrieDB:* `{triedb_str}`\n"
-        f"⏳ *Bot Uptime:* `{uptime}`\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        "🤖 _Type /status to update._"
-    )
-    return msg
-
-def monitor_logs():
-    global missed_block_counter
-    print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
-    process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in process.stdout:
-        line_lower = line.lower()
-        if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
-            missed_block_counter += 1
-            print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
-        elif "sending vote" in line_lower or "committed state" in line_lower:
-            if missed_block_counter > 0:
-                print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
-            missed_block_counter = 0
-
-def check_updates():
-    global last_update_id
-    params = {"timeout": 0}
-    if last_update_id:
-        params["offset"] = last_update_id + 1
-        
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    try:
-        response = requests.get(url, params=params, timeout=5)
-        data = response.json()
-        if not data.get("ok"): return
-
-        for result in data.get("result", []):
-            last_update_id = result["update_id"]
-            if "message" in result and "text" in result["message"]:
-                text = result["message"]["text"]
-                chat_id = result["message"]["chat"]["id"]
-                
-                if str(chat_id) == str(TELEGRAM_CHAT_ID):
-                    if text == "/start":
-                        send_message(chat_id, "👋 Hello! Type */status* for detailed metrics.")
-                    elif text == "/status":
-                        send_message(chat_id, "🔄 Fetching dashboard...")
-                        local_height, tps = get_eth_block_details()
-                        cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
-                        monad_details = get_monad_status_details()
-                        val_data = get_validator_api_details()
-                        net_data = get_network_overview()
-                        
-                        msg = create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data)
-                        send_message(chat_id, msg)
-    except Exception:
-        pass
-
-def main():
-    global is_spiking, missed_block_counter, initial_rewards
-    
-    print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    init_data = get_validator_api_details()
-    if init_data:
-        initial_rewards = init_data["rewards"]
-        
-    log_thread = threading.Thread(target=monitor_logs, daemon=True)
-    log_thread.start()
-    
-    last_height = 0
-    stuck_counter = 0
-    last_report_time = time.time()
-    last_hardware_alert_time = 0 
-    
-    while True:
-        check_updates()
-        current_height, current_tps = get_eth_block_details()
-        cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
-        monad_details = get_monad_status_details()
-        triedb_percent = monad_details.get("triedb_percent")
-        
-        # TIMEOUT ALERTS
-        if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
-            send_alert(f"🚨 **VALIDATOR ALERT** 🚨\nMissed `{missed_block_counter}` consecutive blocks!")
-            missed_block_counter = 0  
-            time.sleep(10) 
-
-        # HARDWARE ALERTS
-        if time.time() - last_hardware_alert_time > 300: 
-            alert_msg = ""
-            if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU:* `{cpu}%`\n"
-            if ram > ALERT_RAM_THRESHOLD: alert_msg += f"⚠️ *HIGH RAM:* `{ram}%`\n"
-            if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *OS DISK:* `{disk_percent}%`\n"
-            if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
-                alert_msg += f"🗄️🆘 *TRIEDB:* `{triedb_percent}%`\n"
-                
-            if alert_msg:
-                send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
-                last_hardware_alert_time = time.time()
-
-        if current_height is not None:
-            if current_height != last_height:
-                stuck_counter = 0
-            else:
-                stuck_counter += 1
-
-            if stuck_counter >= 90: 
-                send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes!")
-                stuck_counter = 0 
-
-            if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                val_data = get_validator_api_details()
-                net_data = get_network_overview()
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data)
-                send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
-                last_report_time = time.time()
-            
-            last_height = current_height
-            
-        time.sleep(CHECK_INTERVAL)
-
-if __name__ == "__main__":
-    main()
+    write_speed_mb = 0.
