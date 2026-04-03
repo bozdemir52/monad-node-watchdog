@@ -16,7 +16,7 @@ NODE_RPC_URL = "http://localhost:8080"
 VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
 # --- HUGINN API TRACKING ---
-VALIDATOR_ADDRESS = "YOUR_WALLET_ADDRESS"
+VALIDATOR_ADDRESS = "YOUR_SECP_ADDRESS"
 HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 
 # Alert Thresholds
