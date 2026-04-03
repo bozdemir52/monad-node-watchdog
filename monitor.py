@@ -2,7 +2,6 @@
 import requests
 import time
 import datetime
-import sys
 import psutil
 import subprocess
 import threading
@@ -14,36 +13,38 @@ TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
 WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (Leave empty if not using)
 NODE_RPC_URL = "http://localhost:8080" # BURAYI KONTROL ET (8080 veya 8545 olabilir)
-VALIDATOR_MONIKER = "YOUR_MONIKER_HERE"
+VALIDATOR_MONIKER = "YOUR_MONIKER_HERE"  
+NODE_RPC_URL = "http://localhost:8080"
+VALIDATOR_MONIKER = "pi69"
 
-# --- WALLET & ON-CHAIN TRACKING ---
-WALLET_ADDRESS = "0xfa7d8840D90d2c1AB8C7370Ddf0BF085dc77da5a"
-ALERT_MIN_BALANCE = 0.5  # Bakiye bu MON'un altına düşerse uyarı verir
+# --- API TRACKING ---
+VALIDATOR_ADDRESS = "YOUR_WALLET_ADDRESS"
+VALIDATOR_API_URL = f"https://monad-api.monadvision.com/testnet/api/validator/detail?validatorAddress={VALIDATOR_ADDRESS}"
+NETWORK_API_URL = "https://monad-api.monadvision.com/testnet/api/overview"
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
 ALERT_DISK_THRESHOLD = 90
 ALERT_RAM_THRESHOLD = 90
-ALERT_TIMEOUT_THRESHOLD = 5  # Consecutive timeouts/missed blocks required to trigger an alert
+ALERT_TIMEOUT_THRESHOLD = 5
 TPS_THRESHOLD = 500
 # ------------------------
 
 CHECK_INTERVAL = 2  
 AUTO_REPORT_INTERVAL = 1 * 60 * 60  
-HYPE_COOLDOWN = 120 # 2 Minutes cooldown for Hype Alerts (Spam Protection)
+HYPE_COOLDOWN = 120 
 
 start_time = time.time()
 last_update_id = None
 is_spiking = False
 missed_block_counter = 0  
 
-# Disk I/O tracking variables
+# Disk I/O tracking
 last_io_counters = None
 last_io_time = 0
 
-# Wallet tracking globals
-initial_balance = None
-initial_nonce = None
+# Session Tracking
+initial_rewards = None
 
 def get_uptime():
     seconds = time.time() - start_time
@@ -73,41 +74,42 @@ def send_message(chat_id, text):
     data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     telegram_api("sendMessage", data)
 
-def send_discord_message(text):
-    if not DISCORD_WEBHOOK_URL: return
-    try:
-        data = {"content": f"🚨 **MONAD NODE ALERT | {VALIDATOR_MONIKER}** 🚨\n{text}"}
-        requests.post(DISCORD_WEBHOOK_URL, json=data, timeout=5)
-    except Exception as e:
-        print(f"[ERROR] Failed to send Discord message: {e}")
-
 def send_alert(text):
     send_message(TELEGRAM_CHAT_ID, text)
-    send_discord_message(text)
 
-def send_heartbeat():
-    if not WATCHDOG_SERVER_IP: return
+# --- EXPLORER API DATA ---
+def get_validator_api_details():
     try:
-        requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
+        response = requests.get(VALIDATOR_API_URL, timeout=5)
+        data = response.json()
+        if data.get("code") == 0 and "result" in data:
+            res = data["result"]
+            return {
+                "stake": float(res.get("stake", 0)),
+                "power": float(res.get("power", 0)),
+                "rewards": float(res.get("commissionReward", 0)),
+                "delegators": int(res.get("delegators", 0)),
+                "apy": float(res.get("apy", 0))
+            }
     except Exception:
-        pass 
+        pass
+    return None
 
-# --- YENİ EKLENEN: CÜZDAN TAKİP FONKSİYONU ---
-def get_wallet_metrics():
+def get_network_overview():
     try:
-        # Bakiye Çek (Wei cinsinden gelir, 10^18'e bölüp MON'a çeviriyoruz)
-        bal_payload = {"jsonrpc": "2.0", "method": "eth_getBalance", "params": [WALLET_ADDRESS, "latest"], "id": 1}
-        bal_resp = requests.post(NODE_RPC_URL, json=bal_payload, timeout=5).json()
-        balance_mon = int(bal_resp["result"], 16) / 10**18
-
-        # Nonce Çek (Attığı TX sayısı)
-        tx_payload = {"jsonrpc": "2.0", "method": "eth_getTransactionCount", "params": [WALLET_ADDRESS, "latest"], "id": 1}
-        tx_resp = requests.post(NODE_RPC_URL, json=tx_payload, timeout=5).json()
-        nonce = int(tx_resp["result"], 16)
-
-        return balance_mon, nonce
+        response = requests.get(NETWORK_API_URL, timeout=5)
+        data = response.json()
+        if data.get("code") == 0 and "result" in data:
+            res = data["result"]
+            return {
+                "latest_block": int(res.get("latestBlockNumber", 0)),
+                "tx_24h": int(res.get("transaction24h", 0)),
+                "validators": int(res.get("totalValidators", 0)),
+                "peak_tps": int(res.get("peakTPS", 0))
+            }
     except Exception:
-        return None, None
+        pass
+    return None
 # ---------------------------------------------
 
 def get_eth_block_details():
@@ -126,10 +128,8 @@ def get_eth_block_details():
 
 def get_system_health():
     global last_io_counters, last_io_time
-    
     cpu = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory().percent
-    
     disk_usage = psutil.disk_usage('/')
     disk_percent = disk_usage.percent
     disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
@@ -146,44 +146,29 @@ def get_system_health():
         
     last_io_counters = io_counters
     last_io_time = current_time
-    
     disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
     
     return cpu, ram, disk_percent, disk_str, disk_io_str
 
 def get_monad_status_details():
-    details = {
-        "triedb_percent": None,
-        "triedb_str": "N/A",
-        "sync_status": "Unknown",
-        "epoch": "N/A",
-        "round": "N/A"
-    }
+    details = {"triedb_percent": None, "triedb_str": "N/A", "sync_status": "Unknown", "epoch": "N/A", "round": "N/A"}
     try:
         result = subprocess.run(['monad-status'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
         lines = result.stdout.split('\n')
-        
         in_consensus = False
         capacity_str = ""
         used_amount_str = ""
         
         for line in lines:
-            if line.startswith('consensus:'):
-                in_consensus = True
-            elif line.startswith('statesync:') or line.startswith('rpc:'):
-                in_consensus = False
+            if line.startswith('consensus:'): in_consensus = True
+            elif line.startswith('statesync:') or line.startswith('rpc:'): in_consensus = False
             
             if in_consensus:
-                if 'status:' in line:
-                    details["sync_status"] = line.split('status:')[1].strip()
-                elif 'epoch:' in line:
-                    details["epoch"] = line.split('epoch:')[1].strip()
-                elif 'round:' in line:
-                    details["round"] = line.split('round:')[1].strip()
+                if 'status:' in line: details["sync_status"] = line.split('status:')[1].strip()
+                elif 'epoch:' in line: details["epoch"] = line.split('epoch:')[1].strip()
+                elif 'round:' in line: details["round"] = line.split('round:')[1].strip()
             
-            if 'capacity:' in line:
-                capacity_str = line.split('capacity:')[1].strip()
-                
+            if 'capacity:' in line: capacity_str = line.split('capacity:')[1].strip()
             if 'used:' in line and '%' in line:
                 match = re.search(r'used:\s*(.*?)\s*\(([\d\.]+)%\)', line)
                 if match:
@@ -194,14 +179,13 @@ def get_monad_status_details():
             details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
         elif details["triedb_percent"] is not None:
             details["triedb_str"] = f"{details['triedb_percent']}%"
-            
         return details
     except Exception:
         return details
 
-def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details, balance, nonce):
-    if height is None:
-        return "🚨 *ERROR:* Cannot reach the Node!"
+def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data):
+    if local_height is None:
+        return "🚨 *ERROR:* Cannot reach the local Node RPC!"
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -216,28 +200,51 @@ def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_de
     rnd = monad_details.get("round", "N/A")
     
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
+
+    # Network Block vs Local Block Comparison
+    network_height_str = ""
+    if net_data and net_data["latest_block"] > 0:
+        net_block = net_data["latest_block"]
+        diff = net_block - local_height
+        diff_str = f"(Behind: {diff})" if diff > 5 else "(Synced)"
+        network_height_str = f"\n🌍 *Network Block:* `{net_block}` {diff_str}"
     
-    # Cüzdan İstatistikleri Hesaplama
-    session_tx = nonce - initial_nonce if nonce is not None and initial_nonce is not None else 0
-    session_gas = initial_balance - balance if balance is not None and initial_balance is not None else 0.0
-    bal_str = f"{balance:.4f} MON" if balance is not None else "RPC Error"
-    
+    # Validator Data
+    if val_data:
+        stake_m = val_data['stake'] / 1000000
+        rewards = val_data['rewards']
+        session_earned = rewards - initial_rewards if initial_rewards is not None else 0.0
+        
+        val_section = (
+            "**🏆 Validator & Network Stats**\n"
+            f"💰 *Rewards (Unclaimed):* `{rewards:,.2f} MON`\n"
+            f"📈 *Session Earned:* `+{session_earned:,.4f} MON`\n"
+            f"💎 *Stake:* `{stake_m:,.2f}M` (`{val_data['power']}%` Power)\n"
+        )
+    else:
+        val_section = "**🏆 Validator Stats**\n⚠️ *API Unreachable*\n"
+
+    # Network Overview Data
+    if net_data:
+        val_section += (
+            f"🌐 *Total Vals:* `{net_data['validators']}` | *Peak TPS:* `{net_data['peak_tps']}`\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+        )
+    else:
+        val_section += "━━━━━━━━━━━━━━━━━━━━━\n"
+
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
         f"📅 `{now}`\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "**⛓️ Blockchain & Validator**\n"
-        f"🧱 *Latest Block:* `{height}`\n"
+        "**⛓️ Blockchain & Node**\n"
+        f"🧱 *Local Block:* `{local_height}`{network_height_str}\n"
         f"⚡ *Current TPS:* `{tps}`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
         f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
-        f"✍️ *Validator Status:* {val_status}\n"
+        f"✍️ *Node Status:* {val_status}\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "**💰 On-Chain Tracker**\n"
-        f"💳 *Balance:* `{bal_str}`\n"
-        f"🚀 *TX Sent (Session):* `+{session_tx}`\n"
-        f"⛽ *Gas Spent (Session):* `{session_gas:.4f} MON`\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
+        + val_section +
         "**🖥️ Server Health**\n"
         f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
         f"💽 *OS Disk:* `{disk_str}`\n"
@@ -252,19 +259,12 @@ def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_de
 def monitor_logs():
     global missed_block_counter
     print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
-    
-    process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], 
-                               stdout=subprocess.PIPE, 
-                               stderr=subprocess.STDOUT, 
-                               text=True)
-    
+    process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
         line_lower = line.lower()
-        
         if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
             missed_block_counter += 1
             print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
-            
         elif "sending vote" in line_lower or "committed state" in line_lower:
             if missed_block_counter > 0:
                 print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
@@ -290,28 +290,28 @@ def check_updates():
                 
                 if str(chat_id) == str(TELEGRAM_CHAT_ID):
                     if text == "/start":
-                        send_message(chat_id, "👋 Hello! I am your Ultimate Validator Watchdog.\nType */status* for detailed metrics.")
+                        send_message(chat_id, "👋 Hello! Type */status* for detailed metrics.")
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
-                        height, tps = get_eth_block_details()
+                        local_height, tps = get_eth_block_details()
                         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
                         monad_details = get_monad_status_details()
-                        balance, nonce = get_wallet_metrics()
-                        msg = create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details, balance, nonce)
+                        val_data = get_validator_api_details()
+                        net_data = get_network_overview()
+                        
+                        msg = create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data)
                         send_message(chat_id, msg)
     except Exception:
         pass
 
 def main():
-    global is_spiking, missed_block_counter, initial_balance, initial_nonce
+    global is_spiking, missed_block_counter, initial_rewards
+    
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    
-    # Başlangıç bakiye ve TX miktarını alalım
-    initial_balance, initial_nonce = get_wallet_metrics()
-    start_bal_str = f"{initial_balance:.4f} MON" if initial_balance is not None else "Unknown"
-    
-    send_alert(f"🚀 *Watchdog Started!*\nMonitoring Hardware, Logs, Disk I/O.\n💳 Starting Balance: `{start_bal_str}`")
-    
+    init_data = get_validator_api_details()
+    if init_data:
+        initial_rewards = init_data["rewards"]
+        
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
     
@@ -319,8 +319,6 @@ def main():
     stuck_counter = 0
     last_report_time = time.time()
     last_hardware_alert_time = 0 
-    last_hype_alert_time = 0 
-    last_wallet_alert_time = 0
     
     while True:
         check_updates()
@@ -328,28 +326,21 @@ def main():
         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
-        current_balance, current_nonce = get_wallet_metrics()
         
-        # --- ALERTS: WALLET BALANCE ---
-        if current_balance is not None and current_balance < ALERT_MIN_BALANCE:
-            if time.time() - last_wallet_alert_time > 3600:  # Saatte 1 kere uyarır (spam yapmaz)
-                send_alert(f"💸 **LOW BALANCE ALERT!** 💸\n\nYour validator wallet is running out of Gas.\n💳 Current Balance: `{current_balance:.4f} MON`\nPlease fund: `{WALLET_ADDRESS}`")
-                last_wallet_alert_time = time.time()
-
-        # --- ALERTS: TIMEOUT / MISSED BLOCK ---
+        # TIMEOUT ALERTS
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
-            send_alert(f"🚨 **VALIDATOR ALERT** 🚨\n\nYour validator missed `{missed_block_counter}` consecutive blocks (Timeout)!\nCheck your node status immediately.")
+            send_alert(f"🚨 **VALIDATOR ALERT** 🚨\nMissed `{missed_block_counter}` consecutive blocks!")
             missed_block_counter = 0  
             time.sleep(10) 
 
-        # --- ALERTS: HARDWARE ---
+        # HARDWARE ALERTS
         if time.time() - last_hardware_alert_time > 300: 
             alert_msg = ""
-            if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU ALERT:* `{cpu}%`\n"
-            if ram > ALERT_RAM_THRESHOLD: alert_msg += f"⚠️ *HIGH RAM ALERT:* `{ram}%`\n"
-            if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *CRITICAL OS DISK ALERT:* `{disk_percent}%`\n"
+            if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU:* `{cpu}%`\n"
+            if ram > ALERT_RAM_THRESHOLD: alert_msg += f"⚠️ *HIGH RAM:* `{ram}%`\n"
+            if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *OS DISK:* `{disk_percent}%`\n"
             if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
-                alert_msg += f"🗄️🆘 *CRITICAL TRIEDB ALERT:* `{triedb_percent}%`\n"
+                alert_msg += f"🗄️🆘 *TRIEDB:* `{triedb_percent}%`\n"
                 
             if alert_msg:
                 send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
@@ -357,36 +348,22 @@ def main():
 
         if current_height is not None:
             if current_height != last_height:
-                print(f"🧱 Block: {current_height} | TPS: {current_tps} | CPU: {cpu}% | I/O: {disk_io_str}")
-                
-                # HYPE ALERT
-                if current_tps > TPS_THRESHOLD:
-                    if time.time() - last_hype_alert_time > HYPE_COOLDOWN:
-                        is_spiking = True
-                        send_alert(f"🚀 *MONAD HYPE ALERT!*\n\nNetwork is under heavy load! 🔥\nCurrent TPS: *{current_tps}*\nBlock: `{current_height}`\n⚙️ Disk I/O: `{disk_io_str}`")
-                        last_hype_alert_time = time.time()
-                elif current_tps <= TPS_THRESHOLD:
-                    is_spiking = False
-                    
                 stuck_counter = 0
             else:
                 stuck_counter += 1
 
-            # STUCK ALERT
             if stuck_counter >= 90: 
-                send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes. Check your node!")
+                send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes!")
                 stuck_counter = 0 
 
-            # AUTOMATIC REPORT 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, current_balance, current_nonce)
+                val_data = get_validator_api_details()
+                net_data = get_network_overview()
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
             last_height = current_height
-            
-        # HEARTBEAT
-        send_heartbeat()
             
         time.sleep(CHECK_INTERVAL)
 
