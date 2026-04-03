@@ -98,9 +98,11 @@ def get_validator_api_details():
             if stake_response.status_code == 200:
                 stake_data = stake_response.json()
                 
-                # Değerleri güvenli bir şekilde çek (float'a çevirerek)
-                stake = float(stake_data.get("stake", stake_data.get("tokens", 0)))
-                rewards = float(stake_data.get("commissionReward", stake_data.get("rewards", 0)))
+                # YENİ JSON YAPISINA GÖRE DÜZELTİLDİ: "validator" objesinin içine giriyoruz
+                if stake_data.get("success") and "validator" in stake_data:
+                    v_data = stake_data["validator"]
+                    stake = float(v_data.get("stake", 0))
+                    rewards = float(v_data.get("unclaimed_rewards", 0))
 
         return {
             "val_id": val_id,
