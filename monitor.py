@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import requests
+import cloudscraper
 import time
 import datetime
 import psutil
@@ -11,8 +12,8 @@ import re
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
-WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (Leave empty if not using)
-NODE_RPC_URL = "http://localhost:8080" # BURAYI KONTROL ET (8080 veya 8545 olabilir)
+WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
+NODE_RPC_URL = "http://localhost:8080" 
 VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
 # --- API TRACKING ---
@@ -20,14 +21,12 @@ VALIDATOR_ADDRESS = "YOUR_WALLET_ADDRESS"
 VALIDATOR_API_URL = f"https://monad-api.monadvision.com/testnet/api/validator/detail?validatorAddress={VALIDATOR_ADDRESS}"
 NETWORK_API_URL = "https://monad-api.monadvision.com/testnet/api/overview"
 
-# BROWSER SPOOFING (Anti-Bot Bypass)
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Origin": "https://monadvision.com",
-    "Referer": "https://monadvision.com/"
-}
+# Cloudflare bypass scraper
+scraper = cloudscraper.create_scraper(browser={
+    'browser': 'chrome',
+    'platform': 'windows',
+    'desktop': True
+})
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
@@ -87,7 +86,7 @@ def send_alert(text):
 # --- EXPLORER API DATA ---
 def get_validator_api_details():
     try:
-        response = requests.get(VALIDATOR_API_URL, headers=HEADERS, timeout=10)
+        response = scraper.get(VALIDATOR_API_URL, timeout=10)
         response.raise_for_status() 
         data = response.json()
         if data.get("code") == 0 and "result" in data:
@@ -105,7 +104,7 @@ def get_validator_api_details():
 
 def get_network_overview():
     try:
-        response = requests.get(NETWORK_API_URL, headers=HEADERS, timeout=10)
+        response = scraper.get(NETWORK_API_URL, timeout=10)
         response.raise_for_status()
         data = response.json()
         if data.get("code") == 0 and "result" in data:
