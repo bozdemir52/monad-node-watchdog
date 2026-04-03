@@ -12,9 +12,13 @@ import re
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
-WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
-NODE_RPC_URL = "http://localhost:8080"
+WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (Leave empty if not using)
+NODE_RPC_URL = "http://localhost:8080" # BURAYI KONTROL ET (8080 veya 8545 olabilir)
 VALIDATOR_MONIKER = "YOUR_MONIKER_HERE"
+
+# --- WALLET & ON-CHAIN TRACKING ---
+WALLET_ADDRESS = "0xfa7d8840D90d2c1AB8C7370Ddf0BF085dc77da5a"
+ALERT_MIN_BALANCE = 0.5  # Bakiye bu MON'un altına düşerse uyarı verir
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
@@ -36,6 +40,10 @@ missed_block_counter = 0
 # Disk I/O tracking variables
 last_io_counters = None
 last_io_time = 0
+
+# Wallet tracking globals
+initial_balance = None
+initial_nonce = None
 
 def get_uptime():
     seconds = time.time() - start_time
@@ -83,6 +91,24 @@ def send_heartbeat():
         requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
     except Exception:
         pass 
+
+# --- YENİ EKLENEN: CÜZDAN TAKİP FONKSİYONU ---
+def get_wallet_metrics():
+    try:
+        # Bakiye Çek (Wei cinsinden gelir, 10^18'e bölüp MON'a çeviriyoruz)
+        bal_payload = {"jsonrpc": "2.0", "method": "eth_getBalance", "params": [WALLET_ADDRESS, "latest"], "id": 1}
+        bal_resp = requests.post(NODE_RPC_URL, json=bal_payload, timeout=5).json()
+        balance_mon = int(bal_resp["result"], 16) / 10**18
+
+        # Nonce Çek (Attığı TX sayısı)
+        tx_payload = {"jsonrpc": "2.0", "method": "eth_getTransactionCount", "params": [WALLET_ADDRESS, "latest"], "id": 1}
+        tx_resp = requests.post(NODE_RPC_URL, json=tx_payload, timeout=5).json()
+        nonce = int(tx_resp["result"], 16)
+
+        return balance_mon, nonce
+    except Exception:
+        return None, None
+# ---------------------------------------------
 
 def get_eth_block_details():
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
@@ -173,7 +199,7 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details):
+def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details, balance, nonce):
     if height is None:
         return "🚨 *ERROR:* Cannot reach the Node!"
     
@@ -191,6 +217,11 @@ def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_de
     
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
     
+    # Cüzdan İstatistikleri Hesaplama
+    session_tx = nonce - initial_nonce if nonce is not None and initial_nonce is not None else 0
+    session_gas = initial_balance - balance if balance is not None and initial_balance is not None else 0.0
+    bal_str = f"{balance:.4f} MON" if balance is not None else "RPC Error"
+    
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
         f"📅 `{now}`\n"
@@ -202,12 +233,16 @@ def create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_de
         f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
         f"✍️ *Validator Status:* {val_status}\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "**🖥️ Server Health (Hardware)**\n"
-        f"🧠 *CPU Usage:* `{cpu}%`\n"
-        f"💾 *RAM Usage:* `{ram}%`\n"
+        "**💰 On-Chain Tracker**\n"
+        f"💳 *Balance:* `{bal_str}`\n"
+        f"🚀 *TX Sent (Session):* `+{session_tx}`\n"
+        f"⛽ *Gas Spent (Session):* `{session_gas:.4f} MON`\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "**🖥️ Server Health**\n"
+        f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
         f"💽 *OS Disk:* `{disk_str}`\n"
         f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
-        f"🗄️ *Monad TrieDB:* `{triedb_str}`\n"
+        f"🗄️ *TrieDB:* `{triedb_str}`\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 _Type /status to update._"
@@ -261,16 +296,21 @@ def check_updates():
                         height, tps = get_eth_block_details()
                         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
                         monad_details = get_monad_status_details()
-                        msg = create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details)
+                        balance, nonce = get_wallet_metrics()
+                        msg = create_status_message(height, tps, cpu, ram, disk_str, disk_io_str, monad_details, balance, nonce)
                         send_message(chat_id, msg)
     except Exception:
         pass
 
 def main():
-    global is_spiking, missed_block_counter
+    global is_spiking, missed_block_counter, initial_balance, initial_nonce
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
     
-    send_alert("🚀 *Watchdog Started!*\nMonitoring Hardware, Logs, Disk I/O, and TPS.")
+    # Başlangıç bakiye ve TX miktarını alalım
+    initial_balance, initial_nonce = get_wallet_metrics()
+    start_bal_str = f"{initial_balance:.4f} MON" if initial_balance is not None else "Unknown"
+    
+    send_alert(f"🚀 *Watchdog Started!*\nMonitoring Hardware, Logs, Disk I/O.\n💳 Starting Balance: `{start_bal_str}`")
     
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
@@ -280,6 +320,7 @@ def main():
     last_report_time = time.time()
     last_hardware_alert_time = 0 
     last_hype_alert_time = 0 
+    last_wallet_alert_time = 0
     
     while True:
         check_updates()
@@ -287,7 +328,14 @@ def main():
         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
+        current_balance, current_nonce = get_wallet_metrics()
         
+        # --- ALERTS: WALLET BALANCE ---
+        if current_balance is not None and current_balance < ALERT_MIN_BALANCE:
+            if time.time() - last_wallet_alert_time > 3600:  # Saatte 1 kere uyarır (spam yapmaz)
+                send_alert(f"💸 **LOW BALANCE ALERT!** 💸\n\nYour validator wallet is running out of Gas.\n💳 Current Balance: `{current_balance:.4f} MON`\nPlease fund: `{WALLET_ADDRESS}`")
+                last_wallet_alert_time = time.time()
+
         # --- ALERTS: TIMEOUT / MISSED BLOCK ---
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
             send_alert(f"🚨 **VALIDATOR ALERT** 🚨\n\nYour validator missed `{missed_block_counter}` consecutive blocks (Timeout)!\nCheck your node status immediately.")
@@ -331,7 +379,7 @@ def main():
 
             # AUTOMATIC REPORT 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details)
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, current_balance, current_nonce)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
