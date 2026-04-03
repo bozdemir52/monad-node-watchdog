@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import requests
-import cloudscraper
 import time
 import datetime
 import psutil
@@ -16,33 +15,22 @@ WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g.,
 NODE_RPC_URL = "http://localhost:8080" 
 VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
-# --- API TRACKING ---
+# --- HUGINN API TRACKING ---
 VALIDATOR_ADDRESS = "YOUR_WALLET_ADDRESS"
-VALIDATOR_API_URL = f"https://monad-api.monadvision.com/testnet/api/validator/detail?validatorAddress={VALIDATOR_ADDRESS}"
-NETWORK_API_URL = "https://monad-api.monadvision.com/testnet/api/overview"
-
-# Cloudflare bypass scraper
-scraper = cloudscraper.create_scraper(browser={
-    'browser': 'chrome',
-    'platform': 'windows',
-    'desktop': True
-})
+HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 
 # Alert Thresholds
 ALERT_CPU_THRESHOLD = 90
 ALERT_DISK_THRESHOLD = 90
 ALERT_RAM_THRESHOLD = 90
 ALERT_TIMEOUT_THRESHOLD = 5
-TPS_THRESHOLD = 500
 # ------------------------
 
 CHECK_INTERVAL = 2  
 AUTO_REPORT_INTERVAL = 1 * 60 * 60  
-HYPE_COOLDOWN = 120 
 
 start_time = time.time()
 last_update_id = None
-is_spiking = False
 missed_block_counter = 0  
 
 # Disk I/O tracking
@@ -83,41 +71,47 @@ def send_message(chat_id, text):
 def send_alert(text):
     send_message(TELEGRAM_CHAT_ID, text)
 
-# --- EXPLORER API DATA ---
+# --- HUGINN EXPLORER API DATA ---
 def get_validator_api_details():
     try:
-        response = scraper.get(VALIDATOR_API_URL, timeout=10)
-        response.raise_for_status() 
-        data = response.json()
-        if data.get("code") == 0 and "result" in data:
-            res = data["result"]
-            return {
-                "stake": float(res.get("stake", 0)),
-                "power": float(res.get("power", 0)),
-                "rewards": float(res.get("commissionReward", 0)),
-                "delegators": int(res.get("delegators", 0)),
-                "apy": float(res.get("apy", 0))
-            }
-    except Exception as e:
-        print(f"[API ERROR] Validator Fetch Failed: {e}")
-    return None
+        # 1. Adım: Cüzdan adresinden Validator ID ve Uptime bilgisini çek
+        uptime_url = f"{HUGINN_BASE_URL}/validator/uptime/{VALIDATOR_ADDRESS}"
+        uptime_response = requests.get(uptime_url, timeout=10)
+        uptime_data = uptime_response.json()
 
-def get_network_overview():
-    try:
-        response = scraper.get(NETWORK_API_URL, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("code") == 0 and "result" in data:
-            res = data["result"]
-            return {
-                "latest_block": int(res.get("latestBlockNumber", 0)),
-                "tx_24h": int(res.get("transaction24h", 0)),
-                "validators": int(res.get("totalValidators", 0)),
-                "peak_tps": int(res.get("peakTPS", 0))
-            }
+        # Uptime datası bazen 'uptime' objesi içinde dönüyor
+        val_info = uptime_data.get("uptime", uptime_data)
+        val_id = val_info.get("validator_id")
+
+        # Uptime hesaplama
+        total_events = val_info.get("total_events", 0)
+        finalized = val_info.get("finalized_count", 0)
+        uptime_pct = (finalized / total_events * 100) if total_events > 0 else 0.0
+
+        stake = 0.0
+        rewards = 0.0
+
+        # 2. Adım: Bulunan ID ile Stake ve Ödül verilerini çek
+        if val_id:
+            stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
+            stake_response = requests.get(stake_url, timeout=10)
+            if stake_response.status_code == 200:
+                stake_data = stake_response.json()
+                
+                # Değerleri güvenli bir şekilde çek (float'a çevirerek)
+                stake = float(stake_data.get("stake", stake_data.get("tokens", 0)))
+                rewards = float(stake_data.get("commissionReward", stake_data.get("rewards", 0)))
+
+        return {
+            "val_id": val_id,
+            "stake": stake,
+            "rewards": rewards,
+            "uptime_pct": uptime_pct
+        }
+
     except Exception as e:
-        print(f"[API ERROR] Network Fetch Failed: {e}")
-    return None
+        print(f"[API ERROR] Huginn Fetch Failed: {e}")
+        return None
 # ---------------------------------------------
 
 def get_eth_block_details():
@@ -191,7 +185,7 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data):
+def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data):
     if local_height is None:
         return "🚨 *ERROR:* Cannot reach the local Node RPC!"
     
@@ -209,44 +203,31 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
     
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
 
-    # Network Block vs Local Block Comparison
-    network_height_str = ""
-    if net_data and net_data["latest_block"] > 0:
-        net_block = net_data["latest_block"]
-        diff = net_block - local_height
-        diff_str = f"(Behind: {diff})" if diff > 5 else "(Synced)"
-        network_height_str = f"\n🌍 *Network Block:* `{net_block}` {diff_str}"
-    
     # Validator Data
-    if val_data:
-        stake_m = val_data['stake'] / 1000000
+    if val_data and val_data.get('val_id') is not None:
+        stake = val_data['stake']
         rewards = val_data['rewards']
+        uptime_pct = val_data['uptime_pct']
+        
         session_earned = rewards - initial_rewards if initial_rewards is not None else 0.0
         
         val_section = (
-            "**🏆 Validator & Network Stats**\n"
-            f"💰 *Rewards (Unclaimed):* `{rewards:,.2f} MON`\n"
+            "**🏆 Huginn Validator Stats**\n"
+            f"🆔 *Val ID:* `#{val_data['val_id']}` | 🟢 *Uptime:* `{uptime_pct:.2f}%`\n"
+            f"💰 *Rewards:* `{rewards:,.2f} MON`\n"
             f"📈 *Session Earned:* `+{session_earned:,.4f} MON`\n"
-            f"💎 *Stake:* `{stake_m:,.2f}M` (`{val_data['power']}%` Power)\n"
-        )
-    else:
-        val_section = "**🏆 Validator Stats**\n⚠️ *API Unreachable*\n"
-
-    # Network Overview Data
-    if net_data:
-        val_section += (
-            f"🌐 *Total Vals:* `{net_data['validators']}` | *Peak TPS:* `{net_data['peak_tps']}`\n"
+            f"💎 *Stake:* `{stake:,.2f} MON`\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
         )
     else:
-        val_section += "━━━━━━━━━━━━━━━━━━━━━\n"
+        val_section = "**🏆 Validator Stats**\n⚠️ *Huginn API Verisi Bekleniyor*\n━━━━━━━━━━━━━━━━━━━━━\n"
 
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
         f"📅 `{now}`\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "**⛓️ Blockchain & Node**\n"
-        f"🧱 *Local Block:* `{local_height}`{network_height_str}\n"
+        f"🧱 *Local Block:* `{local_height}`\n"
         f"⚡ *Current TPS:* `{tps}`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
         f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
@@ -305,19 +286,19 @@ def check_updates():
                         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
                         monad_details = get_monad_status_details()
                         val_data = get_validator_api_details()
-                        net_data = get_network_overview()
                         
-                        msg = create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data)
+                        msg = create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
                         send_message(chat_id, msg)
     except Exception:
         pass
 
 def main():
-    global is_spiking, missed_block_counter, initial_rewards
+    global missed_block_counter, initial_rewards
     
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
+    # Başlangıç ödülünü kaydet
     init_data = get_validator_api_details()
-    if init_data:
+    if init_data and init_data.get('rewards'):
         initial_rewards = init_data["rewards"]
         
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
@@ -366,8 +347,7 @@ def main():
 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
                 val_data = get_validator_api_details()
-                net_data = get_network_overview()
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data, net_data)
+                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
