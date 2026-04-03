@@ -15,7 +15,7 @@ WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (Leave
 NODE_RPC_URL = "http://localhost:8080" # BURAYI KONTROL ET (8080 veya 8545 olabilir)
 VALIDATOR_MONIKER = "YOUR_MONIKER_HERE"  
 NODE_RPC_URL = "http://localhost:8080"
-VALIDATOR_MONIKER = "pi69"
+VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
 # --- API TRACKING ---
 VALIDATOR_ADDRESS = "YOUR_WALLET_ADDRESS"
