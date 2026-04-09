@@ -47,7 +47,7 @@ Monad Watchdog is actively evolving! Here are the upcoming features we plan to i
 ### 1. Clone the Repository
 Download the script to your server:
 ```bash
-git clone [https://github.com/bozdemir52/monad-node-watchdog.git](https://github.com/bozdemir52/monad-node-watchdog.git)
+git clone https://github.com/bozdemir52/monad-node-watchdog.git
 cd monad-node-watchdog
 ```
 2. Install Requirements
