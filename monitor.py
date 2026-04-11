@@ -10,8 +10,8 @@ import re
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
-DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
-WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
+DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here
+WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server
 NODE_RPC_URL = "http://localhost:8080" 
 VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
@@ -24,6 +24,7 @@ ALERT_CPU_THRESHOLD = 90
 ALERT_DISK_THRESHOLD = 90
 ALERT_RAM_THRESHOLD = 90
 ALERT_TIMEOUT_THRESHOLD = 5
+ALERT_TPS_THRESHOLD = 4500  # <--- YENİ: 5000 sınırına yaklaşınca uyarı verir
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -74,16 +75,13 @@ def send_alert(text):
 # --- HUGINN EXPLORER API DATA ---
 def get_validator_api_details():
     try:
-        # 1. Adım: Cüzdan adresinden Validator ID ve Uptime bilgisini çek
         uptime_url = f"{HUGINN_BASE_URL}/validator/uptime/{VALIDATOR_ADDRESS}"
         uptime_response = requests.get(uptime_url, timeout=10)
         uptime_data = uptime_response.json()
 
-        # Uptime datası bazen 'uptime' objesi içinde dönüyor
         val_info = uptime_data.get("uptime", uptime_data)
         val_id = val_info.get("validator_id")
 
-        # Uptime hesaplama
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
         uptime_pct = (finalized / total_events * 100) if total_events > 0 else 0.0
@@ -91,14 +89,11 @@ def get_validator_api_details():
         stake = 0.0
         rewards = 0.0
 
-        # 2. Adım: Bulunan ID ile Stake ve Ödül verilerini çek
         if val_id:
             stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
             stake_response = requests.get(stake_url, timeout=10)
             if stake_response.status_code == 200:
                 stake_data = stake_response.json()
-                
-                # YENİ JSON YAPISINA GÖRE DÜZELTİLDİ: "validator" objesinin içine giriyoruz
                 if stake_data.get("success") and "validator" in stake_data:
                     v_data = stake_data["validator"]
                     stake = float(v_data.get("stake", 0))
@@ -110,11 +105,9 @@ def get_validator_api_details():
             "rewards": rewards,
             "uptime_pct": uptime_pct
         }
-
     except Exception as e:
         print(f"[API ERROR] Huginn Fetch Failed: {e}")
         return None
-# ---------------------------------------------
 
 def get_eth_block_details():
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
@@ -181,8 +174,6 @@ def get_monad_status_details():
         
         if capacity_str and used_amount_str and details["triedb_percent"] is not None:
             details["triedb_str"] = f"{used_amount_str} / {capacity_str} ({details['triedb_percent']}%)"
-        elif details["triedb_percent"] is not None:
-            details["triedb_str"] = f"{details['triedb_percent']}%"
         return details
     except Exception:
         return details
@@ -193,7 +184,6 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
     val_status = "✅ `Active / Signing`"
     if missed_block_counter > 0:
         val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
@@ -202,15 +192,12 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
     sync_status = monad_details.get("sync_status", "Unknown")
     epoch = monad_details.get("epoch", "N/A")
     rnd = monad_details.get("round", "N/A")
-    
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
 
-    # Validator Data
     if val_data and val_data.get('val_id') is not None:
         stake = val_data['stake']
         rewards = val_data['rewards']
         uptime_pct = val_data['uptime_pct']
-        
         session_earned = rewards - initial_rewards if initial_rewards is not None else 0.0
         
         val_section = (
@@ -255,10 +242,7 @@ def monitor_logs():
         line_lower = line.lower()
         if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
             missed_block_counter += 1
-            print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
         elif "sending vote" in line_lower or "committed state" in line_lower:
-            if missed_block_counter > 0:
-                print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
             missed_block_counter = 0
 
 def check_updates():
@@ -266,29 +250,22 @@ def check_updates():
     params = {"timeout": 0}
     if last_update_id:
         params["offset"] = last_update_id + 1
-        
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     try:
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
         if not data.get("ok"): return
-
         for result in data.get("result", []):
             last_update_id = result["update_id"]
             if "message" in result and "text" in result["message"]:
                 text = result["message"]["text"]
                 chat_id = result["message"]["chat"]["id"]
-                
                 if str(chat_id) == str(TELEGRAM_CHAT_ID):
-                    if text == "/start":
-                        send_message(chat_id, "👋 Hello! Type */status* for detailed metrics.")
-                    elif text == "/status":
-                        send_message(chat_id, "🔄 Fetching dashboard...")
+                    if text == "/status":
                         local_height, tps = get_eth_block_details()
                         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
                         monad_details = get_monad_status_details()
                         val_data = get_validator_api_details()
-                        
                         msg = create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
                         send_message(chat_id, msg)
     except Exception:
@@ -296,13 +273,10 @@ def check_updates():
 
 def main():
     global missed_block_counter, initial_rewards
-    
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    # Başlangıç ödülünü kaydet
     init_data = get_validator_api_details()
     if init_data and init_data.get('rewards'):
         initial_rewards = init_data["rewards"]
-        
     log_thread = threading.Thread(target=monitor_logs, daemon=True)
     log_thread.start()
     
@@ -310,7 +284,8 @@ def main():
     stuck_counter = 0
     last_report_time = time.time()
     last_hardware_alert_time = 0 
-    
+    last_tps_alert_time = 0 # <--- YENİ: TPS alarm takibi için
+
     while True:
         check_updates()
         current_height, current_tps = get_eth_block_details()
@@ -318,13 +293,18 @@ def main():
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
         
-        # TIMEOUT ALERTS
+        # --- TPS ALERT LOGIC (YENİ EKLEME) ---
+        if current_tps >= ALERT_TPS_THRESHOLD:
+            if time.time() - last_tps_alert_time > 300: # 5 dakikada bir uyar
+                send_alert(f"🚀 **YÜKSEK TPS UYARISI** 🚀\n\nAğda TPS fırladı! \nGüncel TPS: `{current_tps}`\nSınır (Hardcap): `5000` TPS\n\n_Düğüm performansını kontrol edin._")
+                last_tps_alert_time = time.time()
+        # -------------------------------------
+
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
             send_alert(f"🚨 **VALIDATOR ALERT** 🚨\nMissed `{missed_block_counter}` consecutive blocks!")
             missed_block_counter = 0  
             time.sleep(10) 
 
-        # HARDWARE ALERTS
         if time.time() - last_hardware_alert_time > 300: 
             alert_msg = ""
             if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU:* `{cpu}%`\n"
@@ -332,7 +312,6 @@ def main():
             if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"🆘 *OS DISK:* `{disk_percent}%`\n"
             if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
                 alert_msg += f"🗄️🆘 *TRIEDB:* `{triedb_percent}%`\n"
-                
             if alert_msg:
                 send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
                 last_hardware_alert_time = time.time()
@@ -342,17 +321,14 @@ def main():
                 stuck_counter = 0
             else:
                 stuck_counter += 1
-
             if stuck_counter >= 90: 
                 send_alert(f"🛑 *ALERT: Node STUCK!*\nBlock: `{current_height}`\nNo new blocks for 3 minutes!")
                 stuck_counter = 0 
-
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
                 val_data = get_validator_api_details()
                 msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
-            
             last_height = current_height
             
         time.sleep(CHECK_INTERVAL)
