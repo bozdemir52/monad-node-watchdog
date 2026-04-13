@@ -24,7 +24,7 @@ ALERT_CPU_THRESHOLD = 90
 ALERT_DISK_THRESHOLD = 90
 ALERT_RAM_THRESHOLD = 90
 ALERT_TIMEOUT_THRESHOLD = 5
-ALERT_TPS_THRESHOLD = 4500  # <--- TPS ALARMI BURADA
+ALERT_TPS_THRESHOLD = 4500  # <--- TPS ALERT HERE
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -75,16 +75,16 @@ def send_alert(text):
 # --- HUGINN EXPLORER API DATA ---
 def get_validator_api_details():
     try:
-        # 1. Adım: Cüzdan adresinden Validator ID ve Uptime bilgisini çek
+        # Step 1: Fetch Validator ID and Uptime from wallet address
         uptime_url = f"{HUGINN_BASE_URL}/validator/uptime/{VALIDATOR_ADDRESS}"
         uptime_response = requests.get(uptime_url, timeout=10)
         uptime_data = uptime_response.json()
 
-        # Uptime datası bazen 'uptime' objesi içinde dönüyor
+        # Uptime data sometimes returns inside the 'uptime' object
         val_info = uptime_data.get("uptime", uptime_data)
         val_id = val_info.get("validator_id")
 
-        # Uptime hesaplama
+        # Calculate uptime
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
         uptime_pct = (finalized / total_events * 100) if total_events > 0 else 0.0
@@ -92,14 +92,14 @@ def get_validator_api_details():
         stake = 0.0
         rewards = 0.0
 
-        # 2. Adım: Bulunan ID ile Stake ve Ödül verilerini çek
+        # Step 2: Fetch Stake and Reward data using the found ID
         if val_id:
             stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
             stake_response = requests.get(stake_url, timeout=10)
             if stake_response.status_code == 200:
                 stake_data = stake_response.json()
                 
-                # YENİ JSON YAPISINA GÖRE DÜZELTİLDİ: "validator" objesinin içine giriyoruz
+                # FIXED ACCORDING TO NEW JSON STRUCTURE: We enter the "validator" object
                 if stake_data.get("success") and "validator" in stake_data:
                     v_data = stake_data["validator"]
                     stake = float(v_data.get("stake", 0))
@@ -126,9 +126,9 @@ def get_eth_block_details():
         if "result" in data and data["result"]:
             height = int(data["result"]["number"], 16)
             
-            # TPS ÇARPAN MANTIĞI BURADA EKLENDİ
+            # TPS MULTIPLIER LOGIC ADDED HERE
             tx_in_block = len(data["result"]["transactions"])
-            # Ortalama 0.4s blok süresi varsayımı ile saniyede 2.5 blok üretiliyor:
+            # Assuming an average block time of 0.4s, 2.5 blocks are produced per second:
             estimated_tps = int(tx_in_block * 2.5) 
             
             return height, estimated_tps
@@ -225,22 +225,22 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
             f"💰 *Rewards:* `{rewards:,.2f} MON`\n"
             f"📈 *Session Earned:* `+{session_earned:,.4f} MON`\n"
             f"💎 *Stake:* `{stake:,.2f} MON`\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
         )
     else:
-        val_section = "**🏆 Validator Stats**\n⚠️ *Huginn API Verisi Bekleniyor*\n━━━━━━━━━━━━━━━━━━━\n"
+        val_section = "**🏆 Validator Stats**\n⚠️ *Awaiting Huginn API Data*\n━━━━━━━━━━━━━━━━━━━━━\n"
 
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
         f"📅 `{now}`\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
         "**⛓️ Blockchain & Node**\n"
         f"🧱 *Local Block:* `{local_height}`\n"
         f"⚡ *Current TPS:* `{tps}`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
         f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
         f"✍️ *Node Status:* {val_status}\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
         + val_section +
         "**🖥️ Server Health**\n"
         f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
@@ -248,14 +248,14 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
         f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
         f"🗄️ *TrieDB:* `{triedb_str}`\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 _Type /status to update._"
     )
     return msg
 
 def monitor_logs():
     global missed_block_counter
-    print("🥋 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
+    print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
     process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
         line_lower = line.lower()
@@ -304,7 +304,7 @@ def main():
     global missed_block_counter, initial_rewards
     
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    # Başlangıç ödülünü kaydet
+    # Save the initial rewards
     init_data = get_validator_api_details()
     if init_data and init_data.get('rewards'):
         initial_rewards = init_data["rewards"]
@@ -316,7 +316,7 @@ def main():
     stuck_counter = 0
     last_report_time = time.time()
     last_hardware_alert_time = 0 
-    last_tps_alert_time = 0  # <--- SPAM KORUMASI İÇİN EKLENDİ
+    last_tps_alert_time = 0  # <--- ADDED FOR SPAM PROTECTION
     
     while True:
         check_updates()
@@ -349,11 +349,11 @@ def main():
                 send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
                 last_hardware_alert_time = time.time()
 
-        # TPS ALERTS (YENİ EKLENEN KISIM)
+        # TPS ALERTS
         if current_tps >= ALERT_TPS_THRESHOLD:
-            # Sadece 5 dakikada (300 saniye) bir mesaj atması için kontrol
+            # Check to send a message only once every 5 minutes (300 seconds)
             if time.time() - last_tps_alert_time > 300:
-                send_alert(f"🚀 **YÜKSEK TPS UYARISI** 🚀\nAğ an itibarıyla tahmini `{current_tps}` TPS'ye ulaştı!")
+                send_alert(f"🚀 **HIGH TPS ALERT** 🚀\nThe network has currently reached an estimated `{current_tps}` TPS!")
                 last_tps_alert_time = time.time()
 
         if current_height is not None:
