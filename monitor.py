@@ -8,15 +8,15 @@ import threading
 import re
 
 # --- CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = "8532141223:AAFR3wzqpQOIaUT-wXUxhB2iE-VrX5Nqdrg"
-TELEGRAM_CHAT_ID = "5712826602"
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1482089838105727141/EU0WqD-uonWgClWG_IMf3WGQTmRo4YXs1PGqaEVpSK3RuP3BxocT2KWiEyME56QAY_VJ"  # Paste your Discord Webhook URL here (Leave empty if not using)
-WATCHDOG_SERVER_IP = "http://159.195.5.169:5000"   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
+DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
+WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
 NODE_RPC_URL = "http://localhost:8080"
-VALIDATOR_MONIKER = "pi69"
+VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
 # --- API TRACKING ---
-VALIDATOR_ADDRESS = "03f7e9cb9a8224e2243efb123daacf65804e4c63f0f138f7125f622328e1b9cc0f"
+VALIDATOR_ADDRESS = "YOUR_SECP_ADDRESS"
 HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 
 # Alert Thresholds
