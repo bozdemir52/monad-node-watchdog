@@ -19,12 +19,14 @@ VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 VALIDATOR_ADDRESS = "YOUR_SECP_ADDRESS"
 HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 
-# Alert Thresholds
-ALERT_CPU_THRESHOLD = 90
+# --- ALERT THRESHOLDS (UPDATED FOR HEAVY EXECUTION TEST) ---
+ALERT_CPU_THRESHOLD = 80  # Lowered for early warning
 ALERT_DISK_THRESHOLD = 90
-ALERT_RAM_THRESHOLD = 90
+ALERT_RAM_THRESHOLD = 80  # Lowered for early warning
 ALERT_TIMEOUT_THRESHOLD = 5
-ALERT_TPS_THRESHOLD = 4500  # <--- TPS ALERT HERE
+ALERT_TPS_THRESHOLD = 4500
+ALERT_GAS_SEC_THRESHOLD = 300_000_000  # Alert if network burns > 300M Gas/sec
+ALERT_BASE_FEE_THRESHOLD = 150  # Alert if base fee spikes above 150 Gwei
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -75,16 +77,13 @@ def send_alert(text):
 # --- HUGINN EXPLORER API DATA ---
 def get_validator_api_details():
     try:
-        # Step 1: Fetch Validator ID and Uptime from wallet address
         uptime_url = f"{HUGINN_BASE_URL}/validator/uptime/{VALIDATOR_ADDRESS}"
         uptime_response = requests.get(uptime_url, timeout=10)
         uptime_data = uptime_response.json()
 
-        # Uptime data sometimes returns inside the 'uptime' object
         val_info = uptime_data.get("uptime", uptime_data)
         val_id = val_info.get("validator_id")
 
-        # Calculate uptime
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
         uptime_pct = (finalized / total_events * 100) if total_events > 0 else 0.0
@@ -92,14 +91,11 @@ def get_validator_api_details():
         stake = 0.0
         rewards = 0.0
 
-        # Step 2: Fetch Stake and Reward data using the found ID
         if val_id:
             stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
             stake_response = requests.get(stake_url, timeout=10)
             if stake_response.status_code == 200:
                 stake_data = stake_response.json()
-                
-                # FIXED ACCORDING TO NEW JSON STRUCTURE: We enter the "validator" object
                 if stake_data.get("success") and "validator" in stake_data:
                     v_data = stake_data["validator"]
                     stake = float(v_data.get("stake", 0))
@@ -124,17 +120,22 @@ def get_eth_block_details():
         response.raise_for_status()
         data = response.json()
         if "result" in data and data["result"]:
-            height = int(data["result"]["number"], 16)
+            block = data["result"]
+            height = int(block["number"], 16)
             
-            # TPS MULTIPLIER LOGIC ADDED HERE
-            tx_in_block = len(data["result"]["transactions"])
-            # Assuming an average block time of 0.4s, 2.5 blocks are produced per second:
+            # TPS MULTIPLIER LOGIC
+            tx_in_block = len(block["transactions"])
             estimated_tps = int(tx_in_block * 2.5) 
             
-            return height, estimated_tps
-        return None, 0
+            # GAS AND FEE CALCULATIONS
+            gas_used = int(block.get("gasUsed", "0x0"), 16)
+            base_fee = int(block.get("baseFeePerGas", "0x0"), 16) / 10**9 
+            gas_per_sec = int(gas_used * 2.5)
+            
+            return height, estimated_tps, gas_per_sec, base_fee
+        return None, 0, 0, 0.0
     except Exception:
-        return None, 0
+        return None, 0, 0, 0.0
 
 def get_system_health():
     global last_io_counters, last_io_time
@@ -193,7 +194,7 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data):
+def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, monad_details, val_data):
     if local_height is None:
         return "🚨 *ERROR:* Cannot reach the local Node RPC!"
     
@@ -230,6 +231,8 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
     else:
         val_section = "**🏆 Validator Stats**\n⚠️ *Awaiting Huginn API Data*\n━━━━━━━━━━━━━━━━━━━━━\n"
 
+    gas_formatted = f"{gas_sec / 1_000_000:.1f}M" if gas_sec > 0 else "0"
+
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
         f"📅 `{now}`\n"
@@ -237,6 +240,7 @@ def create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, mo
         "**⛓️ Blockchain & Node**\n"
         f"🧱 *Local Block:* `{local_height}`\n"
         f"⚡ *Current TPS:* `{tps}`\n"
+        f"🔥 *Gas/Sec:* `{gas_formatted}` | 💸 *Base Fee:* `{base_fee:.2f} gwei`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
         f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
         f"✍️ *Node Status:* {val_status}\n"
@@ -290,12 +294,12 @@ def check_updates():
                         send_message(chat_id, "👋 Hello! Type */status* for detailed metrics.")
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
-                        local_height, tps = get_eth_block_details()
+                        local_height, tps, gas_sec, base_fee = get_eth_block_details()
                         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
                         monad_details = get_monad_status_details()
                         val_data = get_validator_api_details()
                         
-                        msg = create_status_message(local_height, tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
+                        msg = create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -304,7 +308,6 @@ def main():
     global missed_block_counter, initial_rewards
     
     print("🚀 [INFO] Monad Ultimate Validator Watchdog started...")
-    # Save the initial rewards
     init_data = get_validator_api_details()
     if init_data and init_data.get('rewards'):
         initial_rewards = init_data["rewards"]
@@ -316,7 +319,10 @@ def main():
     stuck_counter = 0
     last_report_time = time.time()
     last_hardware_alert_time = 0 
-    last_tps_alert_time = 0  # <--- ADDED FOR SPAM PROTECTION
+    last_tps_alert_time = 0 
+    
+    last_gas_alert_time = 0
+    last_fee_alert_time = 0
     
     while True:
         check_updates()
@@ -325,7 +331,8 @@ def main():
                 requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
             except Exception:
                 pass
-        current_height, current_tps = get_eth_block_details()
+                
+        current_height, current_tps, current_gas_sec, current_base_fee = get_eth_block_details()
         cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
@@ -349,9 +356,17 @@ def main():
                 send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
                 last_hardware_alert_time = time.time()
 
+        # GAS AND FEE ALERTS
+        if current_gas_sec >= ALERT_GAS_SEC_THRESHOLD and time.time() - last_gas_alert_time > 300:
+            send_alert(f"🔥 **HEAVY EXECUTION ALERT** 🔥\nAğ şu anda saniyede `{current_gas_sec / 1_000_000:.1f}M` Gas yakıyor! Makineyi yakından takip et.")
+            last_gas_alert_time = time.time()
+            
+        if current_base_fee >= ALERT_BASE_FEE_THRESHOLD and time.time() - last_fee_alert_time > 300:
+            send_alert(f"💸 **BASE FEE SPIKE DETECTED** 💸\nÜcretler `{current_base_fee:.2f} gwei` seviyesine fırladı! (Sustained Demand Algoritması devrede)")
+            last_fee_alert_time = time.time()
+
         # TPS ALERTS
         if current_tps >= ALERT_TPS_THRESHOLD:
-            # Check to send a message only once every 5 minutes (300 seconds)
             if time.time() - last_tps_alert_time > 300:
                 send_alert(f"🚀 **HIGH TPS ALERT** 🚀\nThe network has currently reached an estimated `{current_tps}` TPS!")
                 last_tps_alert_time = time.time()
@@ -368,7 +383,7 @@ def main():
 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
                 val_data = get_validator_api_details()
-                msg = create_status_message(current_height, current_tps, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
+                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
