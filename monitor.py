@@ -358,11 +358,11 @@ def main():
 
         # GAS AND FEE ALERTS (İngilizce versiyon)
         if current_gas_sec >= ALERT_GAS_SEC_THRESHOLD and time.time() - last_gas_alert_time > 300:
-            send_alert(f"🔥 **HEAVY EXECUTION ALERT** 🔥\nThe network is burning `{current_gas_sec / 1_000_000:.1f}M` Gas/sec! Monitor the machine closely.")
+            send_alert(f"\U0001F525 **HEAVY EXECUTION ALERT** \U0001F525\nThe network is burning `{current_gas_sec / 1_000_000:.1f}M` Gas/sec! Monitor the machine closely.")
             last_gas_alert_time = time.time()
     
         if current_base_fee >= ALERT_BASE_FEE_THRESHOLD and time.time() - last_fee_alert_time > 300:
-            send_alert(f"💸 **BASE FEE SPIKE DETECTED** 💸\nFees skyrocketed to `{current_base_fee:.2f} gwei`! (Sustained Demand Algorithm triggered)")
+            send_alert(f"\U0001F4B8 **BASE FEE SPIKE DETECTED** \U0001F4B8\nFees skyrocketed to `{current_base_fee:.2f} gwei`! (Sustained Demand Algorithm triggered)")
             last_fee_alert_time = time.time()
 
         # TPS ALERTS
