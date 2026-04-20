@@ -11,7 +11,7 @@ import re
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 DISCORD_WEBHOOK_URL = ""  # Paste your Discord Webhook URL here (Leave empty if not using)
-WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://192.168.1.100:5000") (Leave empty if not using)
+WATCHDOG_SERVER_IP = ""   # IP and port of your external Heartbeat server (e.g., "http://IP:PORT")
 NODE_RPC_URL = "http://localhost:8080"
 VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 
@@ -19,14 +19,15 @@ VALIDATOR_MONIKER = "YOUR_VAL_MONIKER_NAME"
 VALIDATOR_ADDRESS = "YOUR_SECP_ADDRESS"
 HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 
-# --- ALERT THRESHOLDS (UPDATED FOR HEAVY EXECUTION TEST) ---
-ALERT_CPU_THRESHOLD = 80  # Lowered for early warning
-ALERT_DISK_THRESHOLD = 90
-ALERT_RAM_THRESHOLD = 80  # Lowered for early warning
-ALERT_TIMEOUT_THRESHOLD = 5
+# --- ALERT THRESHOLDS ---
+ALERT_CPU_THRESHOLD = 80  # Alert if CPU > 80%
+ALERT_DISK_THRESHOLD = 90 # Alert if Disk > 90%
+ALERT_RAM_THRESHOLD = 80  # Alert if RAM > 80%
+ALERT_TIMEOUT_THRESHOLD = 5 # Alert after 5 consecutive missed blocks
 ALERT_TPS_THRESHOLD = 4500
 ALERT_GAS_SEC_THRESHOLD = 300_000_000  # Alert if network burns > 300M Gas/sec
 ALERT_BASE_FEE_THRESHOLD = 150  # Alert if base fee spikes above 150 Gwei
+STAKE_THRESHOLD = 11_000_000  # Minimum stake for Active status
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -77,6 +78,7 @@ def send_alert(text):
 # --- HUGINN EXPLORER API DATA ---
 def get_validator_api_details():
     try:
+        # Fetch Uptime Data
         uptime_url = f"{HUGINN_BASE_URL}/validator/uptime/{VALIDATOR_ADDRESS}"
         uptime_response = requests.get(uptime_url, timeout=10)
         uptime_data = uptime_response.json()
@@ -91,6 +93,7 @@ def get_validator_api_details():
         stake = 0.0
         rewards = 0.0
 
+        # Fetch Stake and Rewards Data
         if val_id:
             stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
             stake_response = requests.get(stake_url, timeout=10)
@@ -111,7 +114,6 @@ def get_validator_api_details():
     except Exception as e:
         print(f"[API ERROR] Huginn Fetch Failed: {e}")
         return None
-# ---------------------------------------------
 
 def get_eth_block_details():
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
@@ -123,11 +125,11 @@ def get_eth_block_details():
             block = data["result"]
             height = int(block["number"], 16)
             
-            # TPS MULTIPLIER LOGIC
+            # TPS Estimation
             tx_in_block = len(block["transactions"])
             estimated_tps = int(tx_in_block * 2.5) 
             
-            # GAS AND FEE CALCULATIONS
+            # Gas and Fee Calculations
             gas_used = int(block.get("gasUsed", "0x0"), 16)
             base_fee = int(block.get("baseFeePerGas", "0x0"), 16) / 10**9 
             gas_per_sec = int(gas_used * 2.5)
@@ -201,9 +203,21 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    val_status = "✅ `Active / Signing`"
-    if missed_block_counter > 0:
-        val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
+    # --- UPDATED NODE STATUS LOGIC (11M STAKE THRESHOLD) ---
+    if val_data and 'stake' in val_data:
+        stake_amount = val_data['stake']
+        if stake_amount < STAKE_THRESHOLD:
+            val_status = "💤 `Inactive / Standby`"
+        elif missed_block_counter > 0:
+            val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
+        else:
+            val_status = "✅ `Active / Signing`"
+    else:
+        # Fallback logic if API fails
+        val_status = "✅ `Active / Signing`"
+        if missed_block_counter > 0:
+            val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
+    # --------------------------------------------------------
         
     triedb_str = monad_details.get("triedb_str", "N/A")
     sync_status = monad_details.get("sync_status", "Unknown")
@@ -212,7 +226,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
     
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
 
-    # Validator Data
+    # Validator Data Formatting
     if val_data and val_data.get('val_id') is not None:
         stake = val_data['stake']
         rewards = val_data['rewards']
@@ -356,13 +370,13 @@ def main():
                 send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
                 last_hardware_alert_time = time.time()
 
-        # GAS AND FEE ALERTS (İngilizce versiyon)
+        # NETWORK LOAD ALERTS
         if current_gas_sec >= ALERT_GAS_SEC_THRESHOLD and time.time() - last_gas_alert_time > 300:
-            send_alert(f"\U0001F525 **HEAVY EXECUTION ALERT** \U0001F525\nThe network is burning `{current_gas_sec / 1_000_000:.1f}M` Gas/sec! Monitor the machine closely.")
+            send_alert(f"🔥 **HEAVY EXECUTION ALERT** 🔥\nThe network is burning `{current_gas_sec / 1_000_000:.1f}M` Gas/sec! Monitor the machine closely.")
             last_gas_alert_time = time.time()
     
         if current_base_fee >= ALERT_BASE_FEE_THRESHOLD and time.time() - last_fee_alert_time > 300:
-            send_alert(f"\U0001F4B8 **BASE FEE SPIKE DETECTED** \U0001F4B8\nFees skyrocketed to `{current_base_fee:.2f} gwei`! (Sustained Demand Algorithm triggered)")
+            send_alert(f"💸 **BASE FEE SPIKE DETECTED** 💸\nFees skyrocketed to `{current_base_fee:.2f} gwei`! (Sustained Demand Algorithm triggered)")
             last_fee_alert_time = time.time()
 
         # TPS ALERTS
