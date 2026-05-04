@@ -20,14 +20,14 @@ VALIDATOR_ADDRESS = "YOUR_SECP_ADDRESS"
 HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 
 # --- ALERT THRESHOLDS ---
-ALERT_CPU_THRESHOLD = 80  # Alert if CPU > 80%
-ALERT_DISK_THRESHOLD = 90 # Alert if Disk > 90%
-ALERT_RAM_THRESHOLD = 80  # Alert if RAM > 80%
-ALERT_TIMEOUT_THRESHOLD = 5 # Alert after 5 consecutive missed blocks
+ALERT_CPU_THRESHOLD = 80  
+ALERT_DISK_THRESHOLD = 90 
+ALERT_RAM_THRESHOLD = 80  
+ALERT_TIMEOUT_THRESHOLD = 5 
 ALERT_TPS_THRESHOLD = 4500
-ALERT_GAS_SEC_THRESHOLD = 300_000_000  # Alert if network burns > 300M Gas/sec
-ALERT_BASE_FEE_THRESHOLD = 150  # Alert if base fee spikes above 150 Gwei
-STAKE_THRESHOLD = 11_000_000  # Minimum stake for Active status
+ALERT_GAS_SEC_THRESHOLD = 300_000_000  
+ALERT_BASE_FEE_THRESHOLD = 150  
+STAKE_THRESHOLD = 11_000_000  
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -75,14 +75,48 @@ def send_message(chat_id, text):
 def send_alert(text):
     send_message(TELEGRAM_CHAT_ID, text)
 
-# --- NEW: TEMPERATURE FETCHING ---
+# --- NVME WEAR & TEMPERATURE FETCHING ---
+def get_nvme_stats():
+    nvme_lines = []
+    try:
+        # Sunucudaki tüm nvme diskleri bul (örn: nvme0n1, nvme1n1)
+        ls_output = subprocess.check_output(['ls', '/dev/'], text=True)
+        drives = [d for d in ls_output.split('\n') if re.match(r'^nvme\d+n\d+$', d)]
+        
+        for drive in drives:
+            try:
+                # NVMe cihazından smart log oku
+                cmd = f"sudo nvme smart-log /dev/{drive}"
+                output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+                
+                wear = None
+                temp = None
+                
+                wear_match = re.search(r'percentage_used\s*:\s*(\d+)', output)
+                if wear_match:
+                    wear = int(wear_match.group(1))
+                    
+                temp_match = re.search(r'temperature\s*:\s*(\d+)\s*C', output)
+                if temp_match:
+                    temp = int(temp_match.group(1))
+                    
+                if wear is not None and temp is not None:
+                    # Aşınma durumuna göre emoji belirle
+                    emoji = "🟢" if wear < 75 else ("🟡" if wear < 100 else "🔴")
+                    nvme_lines.append(f"{emoji} *NVMe {drive}:* Wear `{wear}%` | Temp `{temp}°C`")
+            except Exception:
+                continue
+    except Exception:
+        pass
+        
+    return "\n".join(nvme_lines) if nvme_lines else ""
+
+# Genel İşlemci Sıcaklığı (Yedek olarak)
 def get_temperature():
     try:
         if hasattr(psutil, "sensors_temperatures"):
             temps = psutil.sensors_temperatures()
-            if not temps:
-                return "N/A"
-            # Attempt to find coretemp, k10temp, or any valid sensor
+            if not temps: return "N/A"
             for name, entries in temps.items():
                 for entry in entries:
                     if entry.current:
@@ -101,13 +135,12 @@ def get_epoch_details():
             if data.get("success") and "epoch" in data:
                 ep = data["epoch"]
                 return ep.get("current_epoch", "N/A"), ep.get("progress_percent", 0), ep.get("blocks_remaining", 0)
-    except Exception as e:
-        print(f"[API ERROR] Epoch Fetch Failed: {e}")
+    except Exception:
+        pass
     return "N/A", 0, 0
 
 def get_validator_api_details():
     try:
-        # Fetch Uptime Data
         uptime_url = f"{HUGINN_BASE_URL}/validator/uptime/{VALIDATOR_ADDRESS}"
         uptime_response = requests.get(uptime_url, timeout=10)
         uptime_data = uptime_response.json()
@@ -117,7 +150,7 @@ def get_validator_api_details():
 
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
-        timeout_count = val_info.get("timeout_count", 0)  # NEW: Timeout count from API
+        timeout_count = val_info.get("timeout_count", 0)
         uptime_pct = (finalized / total_events * 100) if total_events > 0 else 0.0
 
         stake = 0.0
@@ -125,7 +158,6 @@ def get_validator_api_details():
         is_jailed = False
         val_status = "unknown"
 
-        # Fetch Stake, Rewards and Jailed Status
         if val_id:
             stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
             stake_response = requests.get(stake_url, timeout=10)
@@ -135,7 +167,7 @@ def get_validator_api_details():
                     v_data = stake_data["validator"]
                     stake = float(v_data.get("stake", 0))
                     rewards = float(v_data.get("unclaimed_rewards", 0))
-                    is_jailed = v_data.get("jailed", False)  # NEW: Jailed status
+                    is_jailed = v_data.get("jailed", False)
                     val_status = v_data.get("status", "unknown")
 
         return {
@@ -147,9 +179,7 @@ def get_validator_api_details():
             "is_jailed": is_jailed,
             "status": val_status
         }
-
-    except Exception as e:
-        print(f"[API ERROR] Huginn Fetch Failed: {e}")
+    except Exception:
         return None
 
 def get_eth_block_details():
@@ -162,11 +192,9 @@ def get_eth_block_details():
             block = data["result"]
             height = int(block["number"], 16)
             
-            # TPS Estimation
             tx_in_block = len(block["transactions"])
             estimated_tps = int(tx_in_block * 2.5) 
             
-            # Gas and Fee Calculations
             gas_used = int(block.get("gasUsed", "0x0"), 16)
             base_fee = int(block.get("baseFeePerGas", "0x0"), 16) / 10**9 
             gas_per_sec = int(gas_used * 2.5)
@@ -198,9 +226,10 @@ def get_system_health():
     last_io_time = current_time
     disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
     
-    temp_str = get_temperature() # NEW: Fetch temperature
+    temp_str = get_temperature() 
+    nvme_str = get_nvme_stats() # Mükemmel yeni özelliğimiz!
     
-    return cpu, ram, disk_percent, disk_str, disk_io_str, temp_str
+    return cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str
 
 def get_monad_status_details():
     details = {"triedb_percent": None, "triedb_str": "N/A", "sync_status": "Unknown", "epoch": "N/A", "round": "N/A"}
@@ -234,47 +263,38 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, monad_details, val_data):
+def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_data):
     if local_height is None:
         return "🚨 *ERROR:* Cannot reach the local Node RPC!"
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Fetch Epoch Data
     api_epoch, epoch_prog, blocks_left = get_epoch_details()
     
-    # --- UPDATED NODE STATUS LOGIC (JAILED OVERRIDE) ---
     if val_data and val_data.get('is_jailed'):
         val_status = "🛑 `JAILED (Slashed!)`"
     elif val_data and 'stake' in val_data:
-        stake_amount = val_data['stake']
-        if stake_amount < STAKE_THRESHOLD:
+        if val_data['stake'] < STAKE_THRESHOLD:
             val_status = "💤 `Inactive / Standby`"
         elif missed_block_counter > 0:
             val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
         else:
             val_status = "✅ `Active / Signing`"
     else:
-        # Fallback logic if API fails
         val_status = "✅ `Active / Signing`"
         if missed_block_counter > 0:
             val_status = f"⚠️ `Missing Blocks! ({missed_block_counter})`"
-    # --------------------------------------------------------
         
     triedb_str = monad_details.get("triedb_str", "N/A")
     sync_status = monad_details.get("sync_status", "Unknown")
     rnd = monad_details.get("round", "N/A")
-    
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
 
-    # Validator Data Formatting
     if val_data and val_data.get('val_id') is not None:
         stake = val_data['stake']
         rewards = val_data['rewards']
         uptime_pct = val_data['uptime_pct']
         api_timeouts = val_data.get('timeout_count', 0)
-        
         session_earned = rewards - initial_rewards if initial_rewards is not None else 0.0
         
         val_section = (
@@ -290,6 +310,9 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         val_section = "**🏆 Validator Stats**\n⚠️ *Awaiting Huginn API Data*\n━━━━━━━━━━━━━━━━━━━━━\n"
 
     gas_formatted = f"{gas_sec / 1_000_000:.1f}M" if gas_sec > 0 else "0"
+
+    # NVMe String boş değilse araya ekleyelim
+    nvme_section = f"{nvme_str}\n" if nvme_str else ""
 
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
@@ -307,7 +330,8 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         + val_section +
         "**🖥️ Server Health**\n"
         f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
-        f"🌡️ *Temp:* `{temp_str}`\n"
+        f"🌡️ *Temp (Gen):* `{temp_str}`\n"
+        + nvme_section +
         f"💽 *OS Disk:* `{disk_str}`\n"
         f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
         f"🗄️ *TrieDB:* `{triedb_str}`\n"
@@ -319,16 +343,13 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
 
 def monitor_logs():
     global missed_block_counter
-    print("🥷 [INFO] Ninja Log Reader started. Monitoring 'monad-bft' logs...")
+    print("🥷 [INFO] Ninja Log Reader started...")
     process = subprocess.Popen(['journalctl', '-u', 'monad-bft', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
         line_lower = line.lower()
         if "consensus timeout" in line_lower or "failed to propose" in line_lower or "missed block" in line_lower:
             missed_block_counter += 1
-            print(f"⚠️ [WARN] Consensus issue detected! Streak: {missed_block_counter}")
         elif "sending vote" in line_lower or "committed state" in line_lower:
-            if missed_block_counter > 0:
-                print(f"✅ [INFO] Validator recovered (Vote sent). Resetting timeout counter.")
             missed_block_counter = 0
 
 def check_updates():
@@ -355,11 +376,11 @@ def check_updates():
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
                         local_height, tps, gas_sec, base_fee = get_eth_block_details()
-                        cpu, ram, disk_percent, disk_str, disk_io_str, temp_str = get_system_health()
+                        cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str = get_system_health()
                         monad_details = get_monad_status_details()
                         val_data = get_validator_api_details()
                         
-                        msg = create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, monad_details, val_data)
+                        msg = create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_data)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -380,36 +401,27 @@ def main():
     last_report_time = time.time()
     last_hardware_alert_time = 0 
     last_tps_alert_time = 0 
-    
     last_gas_alert_time = 0
     last_fee_alert_time = 0
     
     while True:
         check_updates()
-        if WATCHDOG_SERVER_IP:
-            try:
-                requests.get(f"{WATCHDOG_SERVER_IP}/ping", timeout=3)
-            except Exception:
-                pass
                 
         current_height, current_tps, current_gas_sec, current_base_fee = get_eth_block_details()
-        cpu, ram, disk_percent, disk_str, disk_io_str, temp_str = get_system_health()
+        cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
         val_api_data = get_validator_api_details()
         
-        # --- NEW: CRITICAL JAILED ALERT ---
         if val_api_data and val_api_data.get("is_jailed"):
-            send_alert("🚨 *CRITICAL ALERT* 🚨\n\nYour validator has been **JAILED (Slashed)** by the network! Immediate action required!")
-            time.sleep(60) # Don't spam the chat every 2 seconds if jailed
+            send_alert("🚨 *CRITICAL ALERT* 🚨\n\nYour validator has been **JAILED (Slashed)**! Immediate action required!")
+            time.sleep(60) 
 
-        # TIMEOUT ALERTS (from logs)
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
             send_alert(f"🚨 **VALIDATOR ALERT** 🚨\nMissed `{missed_block_counter}` consecutive blocks locally!")
             missed_block_counter = 0  
             time.sleep(10) 
 
-        # HARDWARE ALERTS
         if time.time() - last_hardware_alert_time > 300: 
             alert_msg = ""
             if cpu > ALERT_CPU_THRESHOLD: alert_msg += f"⚠️ *HIGH CPU:* `{cpu}%`\n"
@@ -417,24 +429,26 @@ def main():
             if disk_percent > ALERT_DISK_THRESHOLD: alert_msg += f"💽 *OS DISK:* `{disk_percent}%`\n"
             if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
                 alert_msg += f"🗄️💽 *TRIEDB:* `{triedb_percent}%`\n"
-                
+            
+            # --- YENİ EKLENEN NVME AŞINMA ALARMI ---
+            if "🔴" in nvme_str:
+                 alert_msg += f"🔥 **NVME WEAR CRITICAL!** A disk has exceeded 100% wear! Ticking Time Bomb! 💣\n"
+                 
             if alert_msg:
                 send_alert(f"🚨 **SYSTEM RESOURCE WARNING** 🚨\n\n{alert_msg}")
                 last_hardware_alert_time = time.time()
 
-        # NETWORK LOAD ALERTS
         if current_gas_sec >= ALERT_GAS_SEC_THRESHOLD and time.time() - last_gas_alert_time > 300:
-            send_alert(f"🔥 **HEAVY EXECUTION ALERT** 🔥\nThe network is burning `{current_gas_sec / 1_000_000:.1f}M` Gas/sec! Monitor the machine closely.")
+            send_alert(f"🔥 **HEAVY EXECUTION ALERT** 🔥\nNetwork burning `{current_gas_sec / 1_000_000:.1f}M` Gas/sec!")
             last_gas_alert_time = time.time()
     
         if current_base_fee >= ALERT_BASE_FEE_THRESHOLD and time.time() - last_fee_alert_time > 300:
-            send_alert(f"💸 **BASE FEE SPIKE DETECTED** 💸\nFees skyrocketed to `{current_base_fee:.2f} gwei`! (Sustained Demand Algorithm triggered)")
+            send_alert(f"💸 **BASE FEE SPIKE DETECTED** 💸\nFees skyrocketed to `{current_base_fee:.2f} gwei`!")
             last_fee_alert_time = time.time()
 
-        # TPS ALERTS
         if current_tps >= ALERT_TPS_THRESHOLD:
             if time.time() - last_tps_alert_time > 300:
-                send_alert(f"🚀 **HIGH TPS ALERT** 🚀\nThe network has currently reached an estimated `{current_tps}` TPS!")
+                send_alert(f"🚀 **HIGH TPS ALERT** 🚀\nNetwork reached estimated `{current_tps}` TPS!")
                 last_tps_alert_time = time.time()
 
         if current_height is not None:
@@ -448,7 +462,7 @@ def main():
                 stuck_counter = 0 
 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, cpu, ram, disk_str, disk_io_str, temp_str, monad_details, val_api_data)
+                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_api_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
