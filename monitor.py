@@ -79,29 +79,26 @@ def send_alert(text):
 def get_nvme_stats():
     nvme_lines = []
     try:
-        # Sunucudaki tüm nvme diskleri bul (örn: nvme0n1, nvme1n1)
         ls_output = subprocess.check_output(['ls', '/dev/'], text=True)
         drives = [d for d in ls_output.split('\n') if re.match(r'^nvme\d+n\d+$', d)]
         
         for drive in drives:
             try:
-                # NVMe cihazından smart log oku
-                cmd = f"sudo nvme smart-log /dev/{drive}"
+                # Sudo iceriden kaldirildi, bot root olarak calistirilmali!
+                cmd = f"nvme smart-log /dev/{drive}"
                 output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
                 
                 wear = None
                 temp = None
                 
-                wear_match = re.search(r'percentage_used\s*:\s*(\d+)', output)
-                if wear_match:
+                # Daha esnek okuma yapisi
+                wear_match = re.search(r'percentage_used\s*:\s*(\d+)', output, re.IGNORECASE)
+                temp_match = re.search(r'temperature\s*:\s*(\d+)', output, re.IGNORECASE)
+                
+                if wear_match and temp_match:
                     wear = int(wear_match.group(1))
-                    
-                temp_match = re.search(r'temperature\s*:\s*(\d+)\s*C', output)
-                if temp_match:
                     temp = int(temp_match.group(1))
                     
-                if wear is not None and temp is not None:
-                    # Aşınma durumuna göre emoji belirle
                     emoji = "🟢" if wear < 75 else ("🟡" if wear < 100 else "🔴")
                     nvme_lines.append(f"{emoji} *NVMe {drive}:* Wear `{wear}%` | Temp `{temp}°C`")
             except Exception:
@@ -111,7 +108,7 @@ def get_nvme_stats():
         
     return "\n".join(nvme_lines) if nvme_lines else ""
 
-# Genel İşlemci Sıcaklığı (Yedek olarak)
+# Genel Islemci Sicakligi (Yedek olarak)
 def get_temperature():
     try:
         if hasattr(psutil, "sensors_temperatures"):
@@ -132,11 +129,21 @@ def get_epoch_details():
         response = requests.get(epoch_url, timeout=5)
         if response.status_code == 200:
             data = response.json()
+            
+            # API'nin ne dondurdugunu gormek icin konsola yazdiriyoruz:
+            print(f"📡 [DEBUG] Huginn Epoch Data: {data}")
+            
+            # Eger API yapisi eskiyse:
             if data.get("success") and "epoch" in data:
                 ep = data["epoch"]
                 return ep.get("current_epoch", "N/A"), ep.get("progress_percent", 0), ep.get("blocks_remaining", 0)
-    except Exception:
-        pass
+            
+            # Eger API yapisi degistiyse (direkt ana dizindeyse):
+            elif "current_epoch" in data:
+                return data.get("current_epoch", "N/A"), data.get("progress_percent", 0), data.get("blocks_remaining", 0)
+                
+    except Exception as e:
+        print(f"⚠️ [API ERROR] Epoch Fetch Failed: {e}")
     return "N/A", 0, 0
 
 def get_validator_api_details():
@@ -227,7 +234,7 @@ def get_system_health():
     disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
     
     temp_str = get_temperature() 
-    nvme_str = get_nvme_stats() # Mükemmel yeni özelliğimiz!
+    nvme_str = get_nvme_stats() 
     
     return cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str
 
@@ -311,7 +318,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
 
     gas_formatted = f"{gas_sec / 1_000_000:.1f}M" if gas_sec > 0 else "0"
 
-    # NVMe String boş değilse araya ekleyelim
+    # NVMe String bos degilse araya ekleyelim
     nvme_section = f"{nvme_str}\n" if nvme_str else ""
 
     msg = (
@@ -430,7 +437,6 @@ def main():
             if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
                 alert_msg += f"🗄️💽 *TRIEDB:* `{triedb_percent}%`\n"
             
-            # --- YENİ EKLENEN NVME AŞINMA ALARMI ---
             if "🔴" in nvme_str:
                  alert_msg += f"🔥 **NVME WEAR CRITICAL!** A disk has exceeded 100% wear! Ticking Time Bomb! 💣\n"
                  
