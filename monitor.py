@@ -75,7 +75,36 @@ def send_message(chat_id, text):
 def send_alert(text):
     send_message(TELEGRAM_CHAT_ID, text)
 
+# --- NEW: TEMPERATURE FETCHING ---
+def get_temperature():
+    try:
+        if hasattr(psutil, "sensors_temperatures"):
+            temps = psutil.sensors_temperatures()
+            if not temps:
+                return "N/A"
+            # Attempt to find coretemp, k10temp, or any valid sensor
+            for name, entries in temps.items():
+                for entry in entries:
+                    if entry.current:
+                        return f"{entry.current}°C"
+    except Exception:
+        pass
+    return "N/A"
+
 # --- HUGINN EXPLORER API DATA ---
+def get_epoch_details():
+    try:
+        epoch_url = f"{HUGINN_BASE_URL}/staking/epoch"
+        response = requests.get(epoch_url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("success") and "epoch" in data:
+                ep = data["epoch"]
+                return ep.get("current_epoch", "N/A"), ep.get("progress_percent", 0), ep.get("blocks_remaining", 0)
+    except Exception as e:
+        print(f"[API ERROR] Epoch Fetch Failed: {e}")
+    return "N/A", 0, 0
+
 def get_validator_api_details():
     try:
         # Fetch Uptime Data
@@ -88,12 +117,15 @@ def get_validator_api_details():
 
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
+        timeout_count = val_info.get("timeout_count", 0)  # NEW: Timeout count from API
         uptime_pct = (finalized / total_events * 100) if total_events > 0 else 0.0
 
         stake = 0.0
         rewards = 0.0
+        is_jailed = False
+        val_status = "unknown"
 
-        # Fetch Stake and Rewards Data
+        # Fetch Stake, Rewards and Jailed Status
         if val_id:
             stake_url = f"{HUGINN_BASE_URL}/staking/validator/{val_id}"
             stake_response = requests.get(stake_url, timeout=10)
@@ -103,12 +135,17 @@ def get_validator_api_details():
                     v_data = stake_data["validator"]
                     stake = float(v_data.get("stake", 0))
                     rewards = float(v_data.get("unclaimed_rewards", 0))
+                    is_jailed = v_data.get("jailed", False)  # NEW: Jailed status
+                    val_status = v_data.get("status", "unknown")
 
         return {
             "val_id": val_id,
             "stake": stake,
             "rewards": rewards,
-            "uptime_pct": uptime_pct
+            "uptime_pct": uptime_pct,
+            "timeout_count": timeout_count,
+            "is_jailed": is_jailed,
+            "status": val_status
         }
 
     except Exception as e:
@@ -161,7 +198,9 @@ def get_system_health():
     last_io_time = current_time
     disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
     
-    return cpu, ram, disk_percent, disk_str, disk_io_str
+    temp_str = get_temperature() # NEW: Fetch temperature
+    
+    return cpu, ram, disk_percent, disk_str, disk_io_str, temp_str
 
 def get_monad_status_details():
     details = {"triedb_percent": None, "triedb_str": "N/A", "sync_status": "Unknown", "epoch": "N/A", "round": "N/A"}
@@ -178,7 +217,6 @@ def get_monad_status_details():
             
             if in_consensus:
                 if 'status:' in line: details["sync_status"] = line.split('status:')[1].strip()
-                elif 'epoch:' in line: details["epoch"] = line.split('epoch:')[1].strip()
                 elif 'round:' in line: details["round"] = line.split('round:')[1].strip()
             
             if 'capacity:' in line: capacity_str = line.split('capacity:')[1].strip()
@@ -196,15 +234,20 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, monad_details, val_data):
+def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, monad_details, val_data):
     if local_height is None:
         return "🚨 *ERROR:* Cannot reach the local Node RPC!"
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # --- UPDATED NODE STATUS LOGIC (11M STAKE THRESHOLD) ---
-    if val_data and 'stake' in val_data:
+    # Fetch Epoch Data
+    api_epoch, epoch_prog, blocks_left = get_epoch_details()
+    
+    # --- UPDATED NODE STATUS LOGIC (JAILED OVERRIDE) ---
+    if val_data and val_data.get('is_jailed'):
+        val_status = "🛑 `JAILED (Slashed!)`"
+    elif val_data and 'stake' in val_data:
         stake_amount = val_data['stake']
         if stake_amount < STAKE_THRESHOLD:
             val_status = "💤 `Inactive / Standby`"
@@ -221,7 +264,6 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         
     triedb_str = monad_details.get("triedb_str", "N/A")
     sync_status = monad_details.get("sync_status", "Unknown")
-    epoch = monad_details.get("epoch", "N/A")
     rnd = monad_details.get("round", "N/A")
     
     sync_emoji = "🟢" if sync_status == "in-sync" else "🟡"
@@ -231,6 +273,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         stake = val_data['stake']
         rewards = val_data['rewards']
         uptime_pct = val_data['uptime_pct']
+        api_timeouts = val_data.get('timeout_count', 0)
         
         session_earned = rewards - initial_rewards if initial_rewards is not None else 0.0
         
@@ -240,6 +283,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
             f"💰 *Rewards:* `{rewards:,.2f} MON`\n"
             f"📈 *Session Earned:* `+{session_earned:,.4f} MON`\n"
             f"💎 *Stake:* `{stake:,.2f} MON`\n"
+            f"📉 *API Timeouts:* `{api_timeouts}` blocks\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
         )
     else:
@@ -256,12 +300,14 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         f"⚡ *Current TPS:* `{tps}`\n"
         f"🔥 *Gas/Sec:* `{gas_formatted}` | 💸 *Base Fee:* `{base_fee:.2f} gwei`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
-        f"🎯 *Epoch / Round:* `{epoch} / {rnd}`\n"
+        f"🎯 *Epoch:* `{api_epoch}` (`{epoch_prog}%` done, `{blocks_left}` left)\n"
+        f"🔁 *Round:* `{rnd}`\n"
         f"✍️ *Node Status:* {val_status}\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         + val_section +
         "**🖥️ Server Health**\n"
         f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
+        f"🌡️ *Temp:* `{temp_str}`\n"
         f"💽 *OS Disk:* `{disk_str}`\n"
         f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
         f"🗄️ *TrieDB:* `{triedb_str}`\n"
@@ -309,11 +355,11 @@ def check_updates():
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
                         local_height, tps, gas_sec, base_fee = get_eth_block_details()
-                        cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
+                        cpu, ram, disk_percent, disk_str, disk_io_str, temp_str = get_system_health()
                         monad_details = get_monad_status_details()
                         val_data = get_validator_api_details()
                         
-                        msg = create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
+                        msg = create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, monad_details, val_data)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -347,13 +393,19 @@ def main():
                 pass
                 
         current_height, current_tps, current_gas_sec, current_base_fee = get_eth_block_details()
-        cpu, ram, disk_percent, disk_str, disk_io_str = get_system_health()
+        cpu, ram, disk_percent, disk_str, disk_io_str, temp_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
+        val_api_data = get_validator_api_details()
         
-        # TIMEOUT ALERTS
+        # --- NEW: CRITICAL JAILED ALERT ---
+        if val_api_data and val_api_data.get("is_jailed"):
+            send_alert("🚨 *CRITICAL ALERT* 🚨\n\nYour validator has been **JAILED (Slashed)** by the network! Immediate action required!")
+            time.sleep(60) # Don't spam the chat every 2 seconds if jailed
+
+        # TIMEOUT ALERTS (from logs)
         if missed_block_counter >= ALERT_TIMEOUT_THRESHOLD:
-            send_alert(f"🚨 **VALIDATOR ALERT** 🚨\nMissed `{missed_block_counter}` consecutive blocks!")
+            send_alert(f"🚨 **VALIDATOR ALERT** 🚨\nMissed `{missed_block_counter}` consecutive blocks locally!")
             missed_block_counter = 0  
             time.sleep(10) 
 
@@ -396,8 +448,7 @@ def main():
                 stuck_counter = 0 
 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                val_data = get_validator_api_details()
-                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, cpu, ram, disk_str, disk_io_str, monad_details, val_data)
+                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, cpu, ram, disk_str, disk_io_str, temp_str, monad_details, val_api_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
