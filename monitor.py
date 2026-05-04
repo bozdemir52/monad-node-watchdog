@@ -84,14 +84,14 @@ def get_nvme_stats():
         
         for drive in drives:
             try:
-                # Sudo iceriden kaldirildi, bot root olarak calistirilmali!
+                # Sudo is removed from the command, bot must be run as root!
                 cmd = f"nvme smart-log /dev/{drive}"
                 output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
                 
                 wear = None
                 temp = None
                 
-                # Daha esnek okuma yapisi
+                # Flexible regex matching for wear and temp
                 wear_match = re.search(r'percentage_used\s*:\s*(\d+)', output, re.IGNORECASE)
                 temp_match = re.search(r'temperature\s*:\s*(\d+)', output, re.IGNORECASE)
                 
@@ -99,16 +99,18 @@ def get_nvme_stats():
                     wear = int(wear_match.group(1))
                     temp = int(temp_match.group(1))
                     
+                    # Set emoji based on drive wear percentage
                     emoji = "🟢" if wear < 75 else ("🟡" if wear < 100 else "🔴")
                     nvme_lines.append(f"{emoji} *NVMe {drive}:* Wear `{wear}%` | Temp `{temp}°C`")
             except Exception:
+                # Skip if drive cannot be accessed
                 continue
     except Exception:
         pass
         
     return "\n".join(nvme_lines) if nvme_lines else ""
 
-# Genel Islemci Sicakligi (Yedek olarak)
+# General CPU Temperature (Fallback)
 def get_temperature():
     try:
         if hasattr(psutil, "sensors_temperatures"):
@@ -130,21 +132,15 @@ def get_epoch_details():
         if response.status_code == 200:
             data = response.json()
             
-            # API'nin ne dondurdugunu gormek icin konsola yazdiriyoruz:
-            print(f"📡 [DEBUG] Huginn Epoch Data: {data}")
-            
-            # Eger API yapisi eskiyse:
             if data.get("success") and "epoch" in data:
-                ep = data["epoch"]
-                return ep.get("current_epoch", "N/A"), ep.get("progress_percent", 0), ep.get("blocks_remaining", 0)
-            
-            # Eger API yapisi degistiyse (direkt ana dizindeyse):
-            elif "current_epoch" in data:
-                return data.get("current_epoch", "N/A"), data.get("progress_percent", 0), data.get("blocks_remaining", 0)
+                # In the new API structure, epoch is an integer
+                current_epoch = data["epoch"]
+                # Progress and blocks_remaining are no longer provided, returning 'N/A'
+                return current_epoch, "N/A", "N/A"
                 
     except Exception as e:
         print(f"⚠️ [API ERROR] Epoch Fetch Failed: {e}")
-    return "N/A", 0, 0
+    return "N/A", "N/A", "N/A"
 
 def get_validator_api_details():
     try:
@@ -318,7 +314,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
 
     gas_formatted = f"{gas_sec / 1_000_000:.1f}M" if gas_sec > 0 else "0"
 
-    # NVMe String bos degilse araya ekleyelim
+    # Add NVMe section if string is not empty
     nvme_section = f"{nvme_str}\n" if nvme_str else ""
 
     msg = (
@@ -437,6 +433,7 @@ def main():
             if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
                 alert_msg += f"🗄️💽 *TRIEDB:* `{triedb_percent}%`\n"
             
+            # Watchdog alert for NVMe critical wear
             if "🔴" in nvme_str:
                  alert_msg += f"🔥 **NVME WEAR CRITICAL!** A disk has exceeded 100% wear! Ticking Time Bomb! 💣\n"
                  
