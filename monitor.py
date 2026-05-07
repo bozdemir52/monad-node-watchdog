@@ -84,14 +84,12 @@ def get_nvme_stats():
         
         for drive in drives:
             try:
-                # Sudo is removed from the command, bot must be run as root!
                 cmd = f"nvme smart-log /dev/{drive}"
                 output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
                 
                 wear = None
                 temp = None
                 
-                # Flexible regex matching for wear and temp
                 wear_match = re.search(r'percentage_used\s*:\s*(\d+)', output, re.IGNORECASE)
                 temp_match = re.search(r'temperature\s*:\s*(\d+)', output, re.IGNORECASE)
                 
@@ -99,11 +97,9 @@ def get_nvme_stats():
                     wear = int(wear_match.group(1))
                     temp = int(temp_match.group(1))
                     
-                    # Set emoji based on drive wear percentage
                     emoji = "🟢" if wear < 75 else ("🟡" if wear < 100 else "🔴")
                     nvme_lines.append(f"{emoji} *NVMe {drive}:* Wear `{wear}%` | Temp `{temp}°C`")
             except Exception:
-                # Skip if drive cannot be accessed
                 continue
     except Exception:
         pass
@@ -133,10 +129,22 @@ def get_epoch_details():
             data = response.json()
             
             if data.get("success") and "epoch" in data:
-                # In the new API structure, epoch is an integer
                 current_epoch = data["epoch"]
-                # Progress and blocks_remaining are no longer provided, returning 'N/A'
-                return current_epoch, "N/A", "N/A"
+                
+                # Fetching potential new keys from Huginn API
+                progress = data.get("progress", data.get("epoch_progress", "N/A"))
+                blocks_left = data.get("blocks_remaining", data.get("time_remaining", "N/A"))
+                
+                # Convert decimal to percentage if needed
+                if isinstance(progress, (float, int)):
+                    if progress < 1:  
+                        progress_str = f"{progress * 100:.2f}"
+                    else: 
+                        progress_str = f"{progress:.2f}"
+                else:
+                    progress_str = str(progress)
+
+                return current_epoch, progress_str, str(blocks_left)
                 
     except Exception as e:
         print(f"⚠️ [API ERROR] Epoch Fetch Failed: {e}")
@@ -313,8 +321,6 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         val_section = "**🏆 Validator Stats**\n⚠️ *Awaiting Huginn API Data*\n━━━━━━━━━━━━━━━━━━━━━\n"
 
     gas_formatted = f"{gas_sec / 1_000_000:.1f}M" if gas_sec > 0 else "0"
-
-    # Add NVMe section if string is not empty
     nvme_section = f"{nvme_str}\n" if nvme_str else ""
 
     msg = (
@@ -407,6 +413,9 @@ def main():
     last_gas_alert_time = 0
     last_fee_alert_time = 0
     
+    # --- NEW STAKE TRACKING VARIABLE ---
+    last_stake = init_data.get("stake") if init_data else None
+    
     while True:
         check_updates()
                 
@@ -415,6 +424,18 @@ def main():
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
         val_api_data = get_validator_api_details()
+        
+        # --- STAKE ALERTS ---
+        if val_api_data and "stake" in val_api_data:
+            current_stake = val_api_data["stake"]
+            if last_stake is not None:
+                if current_stake < last_stake:
+                    dropped_amount = last_stake - current_stake
+                    send_alert(f"⚠️ **STAKE DROP ALERT** ⚠️\n`{dropped_amount:,.2f} MON` was unstaked from your validator!\nCurrent Stake: `{current_stake:,.2f} MON`")
+                elif current_stake > last_stake:
+                    gained_amount = current_stake - last_stake
+                    send_alert(f"🎉 **STAKE INCREASE ALERT** 🎉\n`{gained_amount:,.2f} MON` was delegated to your validator!\nCurrent Stake: `{current_stake:,.2f} MON`")
+            last_stake = current_stake
         
         if val_api_data and val_api_data.get("is_jailed"):
             send_alert("🚨 *CRITICAL ALERT* 🚨\n\nYour validator has been **JAILED (Slashed)**! Immediate action required!")
@@ -433,7 +454,6 @@ def main():
             if triedb_percent is not None and triedb_percent > ALERT_DISK_THRESHOLD: 
                 alert_msg += f"🗄️💽 *TRIEDB:* `{triedb_percent}%`\n"
             
-            # Watchdog alert for NVMe critical wear
             if "🔴" in nvme_str:
                  alert_msg += f"🔥 **NVME WEAR CRITICAL!** A disk has exceeded 100% wear! Ticking Time Bomb! 💣\n"
                  
