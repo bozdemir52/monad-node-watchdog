@@ -23,7 +23,7 @@ HUGINN_BASE_URL = "https://validator-api-testnet.huginn.tech/monad-api"
 ALERT_CPU_THRESHOLD = 80  
 ALERT_DISK_THRESHOLD = 90 
 ALERT_RAM_THRESHOLD = 80  
-ALERT_TIMEOUT_THRESHOLD = 1 
+ALERT_TIMEOUT_THRESHOLD = 1  # <-- SADECE 1 BLOK KAÇIRINCA UYARACAK
 ALERT_TPS_THRESHOLD = 4500
 ALERT_GAS_SEC_THRESHOLD = 300_000_000  
 ALERT_BASE_FEE_THRESHOLD = 150  
@@ -131,11 +131,9 @@ def get_epoch_details():
             if data.get("success") and "epoch" in data:
                 current_epoch = data["epoch"]
                 
-                # Fetching potential new keys from Huginn API
                 progress = data.get("progress", data.get("epoch_progress", "N/A"))
                 blocks_left = data.get("blocks_remaining", data.get("time_remaining", "N/A"))
                 
-                # Convert decimal to percentage if needed
                 if isinstance(progress, (float, int)):
                     if progress < 1:  
                         progress_str = f"{progress * 100:.2f}"
@@ -280,7 +278,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
     
     uptime = get_uptime()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    api_epoch, epoch_prog, blocks_left = get_epoch_details()
+    api_epoch, _, _ = get_epoch_details()
     
     if val_data and val_data.get('is_jailed'):
         val_status = "🛑 `JAILED (Slashed!)`"
@@ -332,7 +330,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         f"⚡ *Current TPS:* `{tps}`\n"
         f"🔥 *Gas/Sec:* `{gas_formatted}` | 💸 *Base Fee:* `{base_fee:.2f} gwei`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
-        f"🎯 *Epoch:* `{api_epoch}` (`{epoch_prog}%` done, `{blocks_left}` left)\n"
+        f"🎯 *Epoch:* `{api_epoch}`\n"  # <-- N/A YAZILARI KALDIRILDI
         f"🔁 *Round:* `{rnd}`\n"
         f"✍️ *Node Status:* {val_status}\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
