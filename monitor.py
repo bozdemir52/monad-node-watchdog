@@ -28,6 +28,7 @@ ALERT_TPS_THRESHOLD = 4500
 ALERT_GAS_SEC_THRESHOLD = 300_000_000  
 ALERT_BASE_FEE_THRESHOLD = 150  
 STAKE_THRESHOLD = 11_000_000  
+API_LAG_THRESHOLD = 5000  # API yerel node'dan bu kadar blok geride kalırsa uyaracak
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -156,6 +157,7 @@ def get_validator_api_details():
 
         val_info = uptime_data.get("uptime", uptime_data)
         val_id = val_info.get("validator_id")
+        api_block_height = val_info.get("last_block_height") # Huginn'in kaldığı son blok (Donma tespiti için ekledik)
 
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
@@ -186,7 +188,8 @@ def get_validator_api_details():
             "uptime_pct": uptime_pct,
             "timeout_count": timeout_count,
             "is_jailed": is_jailed,
-            "status": val_status
+            "status": val_status,
+            "api_block_height": api_block_height
         }
     except Exception:
         return None
@@ -212,33 +215,6 @@ def get_eth_block_details():
         return None, 0, 0, 0.0
     except Exception:
         return None, 0, 0, 0.0
-
-def get_system_health():
-    global last_io_counters, last_io_time
-    cpu = psutil.cpu_percent(interval=0.1)
-    ram = psutil.virtual_memory().percent
-    disk_usage = psutil.disk_usage('/')
-    disk_percent = disk_usage.percent
-    disk_str = f"{format_bytes(disk_usage.used)} / {format_bytes(disk_usage.total)} ({disk_percent}%)"
-    
-    io_counters = psutil.disk_io_counters()
-    current_time = time.time()
-    read_speed_mb = 0.0
-    write_speed_mb = 0.0
-    
-    if last_io_counters and (current_time - last_io_time) > 0:
-        time_diff = current_time - last_io_time
-        read_speed_mb = (io_counters.read_bytes - last_io_counters.read_bytes) / time_diff / (1024 * 1024)
-        write_speed_mb = (io_counters.write_bytes - last_io_counters.write_bytes) / time_diff / (1024 * 1024)
-        
-    last_io_counters = io_counters
-    last_io_time = current_time
-    disk_io_str = f"{read_speed_mb:.2f} MB/s Read | {write_speed_mb:.2f} MB/s Write"
-    
-    temp_str = get_temperature() 
-    nvme_str = get_nvme_stats() 
-    
-    return cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str
 
 def get_monad_status_details():
     details = {"triedb_percent": None, "triedb_str": "N/A", "sync_status": "Unknown", "epoch": "N/A", "round": "N/A"}
@@ -339,7 +315,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
         f"🌡️ *Temp (Gen):* `{temp_str}`\n"
         + nvme_section +
-        f"💽 *OS Disk:* `{disk_str}`\n"
+        "💽 *OS Disk:* `{disk_str}`\n"
         f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
         f"🗄️ *TrieDB:* `{triedb_str}`\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
@@ -411,7 +387,9 @@ def main():
     last_gas_alert_time = 0
     last_fee_alert_time = 0
     
-    # --- NEW STAKE TRACKING VARIABLE ---
+    # --- YENİ ALARM TAKİP DEĞİŞKENLERİ ---
+    last_api_lag_alert_time = 0
+    api_down_alerted = False
     last_stake = init_data.get("stake") if init_data else None
     
     while True:
@@ -423,17 +401,36 @@ def main():
         triedb_percent = monad_details.get("triedb_percent")
         val_api_data = get_validator_api_details()
         
-        # --- STAKE ALERTS ---
-        if val_api_data and "stake" in val_api_data:
-            current_stake = val_api_data["stake"]
-            if last_stake is not None:
-                if current_stake < last_stake:
-                    dropped_amount = last_stake - current_stake
-                    send_alert(f"⚠️ **STAKE DROP ALERT** ⚠️\n`{dropped_amount:,.2f} MON` was unstaked from your validator!\nCurrent Stake: `{current_stake:,.2f} MON`")
-                elif current_stake > last_stake:
-                    gained_amount = current_stake - last_stake
-                    send_alert(f"🎉 **STAKE INCREASE ALERT** 🎉\n`{gained_amount:,.2f} MON` was delegated to your validator!\nCurrent Stake: `{current_stake:,.2f} MON`")
-            last_stake = current_stake
+        # --- HUGINN API ÇÖKME VE DONMA KORUMALARI ---
+        if val_api_data is None:
+            if not api_down_alerted:
+                send_alert("⚠️ **API SESSİZLİK UYARISI** ⚠️\nHuginn API'sine erişilemiyor! Bot şu an delege (stake) değişimlerini izleyemiyor (Kör nokta).")
+                api_down_alerted = True
+        else:
+            if api_down_alerted:
+                send_alert("✅ Huginn API bağlantısı tekrar sağlandı. İzleme aktif.")
+                api_down_alerted = False
+            
+            # API Donma/Gecikme Kontrolü (Lag Detection)
+            if current_height is not None and val_api_data.get("api_block_height") is not None:
+                api_height = val_api_data["api_block_height"]
+                lag = current_height - api_height
+                if lag > API_LAG_THRESHOLD:
+                    if time.time() - last_api_lag_alert_time > 3600:  # Saatte bir kez uyar
+                        send_alert(f"⏳ **HUGINN API DONMA UYARISI** ⏳\nHuginn API senin node'undan `{lag:,}` blok geride kalmış!\nDelege ve ödül verileri şu an güncel olmayabilir, panik yapma ama aklında bulunsun.")
+                        last_api_lag_alert_time = time.time()
+
+            # --- STAKE ALERTS ---
+            if "stake" in val_api_data:
+                current_stake = val_api_data["stake"]
+                if last_stake is not None:
+                    if current_stake < last_stake:
+                        dropped_amount = last_stake - current_stake
+                        send_alert(f"⚠️ **STAKE DROP ALERT** ⚠️\n`{dropped_amount:,.2f} MON` was unstaked from your validator!\nCurrent Stake: `{current_stake:,.2f} MON`")
+                    elif current_stake > last_stake:
+                        gained_amount = current_stake - last_stake
+                        send_alert(f"🎉 **STAKE INCREASE ALERT** 🎉\n`{gained_amount:,.2f} MON` was delegated to your validator!\nCurrent Stake: `{current_stake:,.2f} MON`")
+                last_stake = current_stake
         
         if val_api_data and val_api_data.get("is_jailed"):
             send_alert("🚨 *CRITICAL ALERT* 🚨\n\nYour validator has been **JAILED (Slashed)**! Immediate action required!")
