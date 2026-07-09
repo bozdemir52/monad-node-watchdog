@@ -28,7 +28,7 @@ ALERT_TPS_THRESHOLD = 4500
 ALERT_GAS_SEC_THRESHOLD = 300_000_000  
 ALERT_BASE_FEE_THRESHOLD = 150  
 STAKE_THRESHOLD = 11_000_000  
-API_LAG_THRESHOLD = 5000  # API yerel node'dan bu kadar blok geride kalırsa uyaracak
+API_LAG_THRESHOLD = 5000  # Trigger alert if the API lags behind the local node by this many blocks
 # ------------------------
 
 CHECK_INTERVAL = 2  
@@ -41,6 +41,10 @@ missed_block_counter = 0
 # Disk I/O tracking
 last_io_counters = None
 last_io_time = 0
+
+# Block Time Tracking variables
+last_block_time_check = 0
+last_block_height_for_time = 0
 
 # Session Tracking
 initial_rewards = None
@@ -121,6 +125,36 @@ def get_temperature():
         pass
     return "N/A"
 
+# --- SYSTEM HEALTH SUMMARY ---
+def get_system_health():
+    global last_io_counters, last_io_time
+    cpu = psutil.cpu_percent(interval=None)
+    ram = psutil.virtual_memory().percent
+    
+    disk_info = psutil.disk_usage('/')
+    disk_percent = disk_info.percent
+    disk_str = f"{format_bytes(disk_info.used)} / {format_bytes(disk_info.total)} ({disk_percent}%)"
+    
+    # Disk I/O calculation
+    current_io = psutil.disk_io_counters()
+    current_time = time.time()
+    disk_io_str = "0.00 MB/s Read | 0.00 MB/s Write"
+    
+    if last_io_counters and last_io_time:
+        time_diff = current_time - last_io_time
+        if time_diff > 0:
+            read_speed = (current_io.read_bytes - last_io_counters.read_bytes) / time_diff / (1024 * 1024)
+            write_speed = (current_io.write_bytes - last_io_counters.write_bytes) / time_diff / (1024 * 1024)
+            disk_io_str = f"{read_speed:.2f} MB/s Read | {write_speed:.2f} MB/s Write"
+            
+    last_io_counters = current_io
+    last_io_time = current_time
+    
+    temp_str = get_temperature()
+    nvme_str = get_nvme_stats()
+    
+    return cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str
+
 # --- HUGINN EXPLORER API DATA ---
 def get_epoch_details():
     try:
@@ -157,7 +191,7 @@ def get_validator_api_details():
 
         val_info = uptime_data.get("uptime", uptime_data)
         val_id = val_info.get("validator_id")
-        api_block_height = val_info.get("last_block_height") # Huginn'in kaldığı son blok (Donma tespiti için ekledik)
+        api_block_height = val_info.get("last_block_height") 
 
         total_events = val_info.get("total_events", 0)
         finalized = val_info.get("finalized_count", 0)
@@ -195,6 +229,7 @@ def get_validator_api_details():
         return None
 
 def get_eth_block_details():
+    global last_block_time_check, last_block_height_for_time
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
     try:
         response = requests.post(NODE_RPC_URL, json=payload, timeout=5)
@@ -211,10 +246,21 @@ def get_eth_block_details():
             base_fee = int(block.get("baseFeePerGas", "0x0"), 16) / 10**9 
             gas_per_sec = int(gas_used * 2.5)
             
-            return height, estimated_tps, gas_per_sec, base_fee
-        return None, 0, 0, 0.0
+            # --- Live Block Time (ms) Calculation ---
+            current_time = time.time()
+            block_time_ms = 0.0
+            if last_block_height_for_time != 0 and height > last_block_height_for_time:
+                blocks_diff = height - last_block_height_for_time
+                time_diff = current_time - last_block_time_check
+                block_time_ms = (time_diff / blocks_diff) * 1000
+            
+            last_block_time_check = current_time
+            last_block_height_for_time = height
+            
+            return height, estimated_tps, gas_per_sec, base_fee, block_time_ms
+        return None, 0, 0, 0.0, 0.0
     except Exception:
-        return None, 0, 0, 0.0
+        return None, 0, 0, 0.0, 0.0
 
 def get_monad_status_details():
     details = {"triedb_percent": None, "triedb_str": "N/A", "sync_status": "Unknown", "epoch": "N/A", "round": "N/A"}
@@ -248,7 +294,7 @@ def get_monad_status_details():
     except Exception:
         return details
 
-def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_data):
+def create_status_message(local_height, tps, gas_sec, base_fee, block_time_ms, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_data):
     if local_height is None:
         return "🚨 *ERROR:* Cannot reach the local Node RPC!"
     
@@ -296,6 +342,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
 
     gas_formatted = f"{gas_sec / 1_000_000:.1f}M" if gas_sec > 0 else "0"
     nvme_section = f"{nvme_str}\n" if nvme_str else ""
+    block_time_display = f"{block_time_ms:.0f} ms" if block_time_ms > 0 else "Calculating..."
 
     msg = (
         f"🛡️ *{VALIDATOR_MONIKER} | MONAD WATCHDOG*\n"
@@ -303,6 +350,7 @@ def create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_s
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "**⛓️ Blockchain & Node**\n"
         f"🧱 *Local Block:* `{local_height}`\n"
+        f"⏱️ *Block Time:* `{block_time_display}`\n"
         f"⚡ *Current TPS:* `{tps}`\n"
         f"🔥 *Gas/Sec:* `{gas_formatted}` | 💸 *Base Fee:* `{base_fee:.2f} gwei`\n"
         f"🔄 *Sync Status:* {sync_emoji} `{sync_status}`\n"
@@ -358,12 +406,12 @@ def check_updates():
                         send_message(chat_id, "👋 Hello! Type */status* for detailed metrics.")
                     elif text == "/status":
                         send_message(chat_id, "🔄 Fetching dashboard...")
-                        local_height, tps, gas_sec, base_fee = get_eth_block_details()
+                        local_height, tps, gas_sec, base_fee, block_time_ms = get_eth_block_details()
                         cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str = get_system_health()
                         monad_details = get_monad_status_details()
                         val_data = get_validator_api_details()
                         
-                        msg = create_status_message(local_height, tps, gas_sec, base_fee, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_data)
+                        msg = create_status_message(local_height, tps, gas_sec, base_fee, block_time_ms, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_data)
                         send_message(chat_id, msg)
     except Exception:
         pass
@@ -387,7 +435,7 @@ def main():
     last_gas_alert_time = 0
     last_fee_alert_time = 0
     
-    # --- YENİ ALARM TAKİP DEĞİŞKENLERİ ---
+    # --- ALARM TRACKING VARIABLES ---
     last_api_lag_alert_time = 0
     api_down_alerted = False
     last_stake = init_data.get("stake") if init_data else None
@@ -395,29 +443,29 @@ def main():
     while True:
         check_updates()
                 
-        current_height, current_tps, current_gas_sec, current_base_fee = get_eth_block_details()
+        current_height, current_tps, current_gas_sec, current_base_fee, current_block_time_ms = get_eth_block_details()
         cpu, ram, disk_percent, disk_str, disk_io_str, temp_str, nvme_str = get_system_health()
         monad_details = get_monad_status_details()
         triedb_percent = monad_details.get("triedb_percent")
         val_api_data = get_validator_api_details()
         
-        # --- HUGINN API ÇÖKME VE DONMA KORUMALARI ---
+        # --- HUGINN API SILENCE & LAG PROTECTION ---
         if val_api_data is None:
             if not api_down_alerted:
-                send_alert("⚠️ **API SESSİZLİK UYARISI** ⚠️\nHuginn API'sine erişilemiyor! Bot şu an delege (stake) değişimlerini izleyemiyor (Kör nokta).")
+                send_alert("⚠️ **API SILENCE WARNING** ⚠️\nHuginn API is unreachable! The bot cannot track delegation (stake) changes right now (Blind spot).")
                 api_down_alerted = True
         else:
             if api_down_alerted:
-                send_alert("✅ Huginn API bağlantısı tekrar sağlandı. İzleme aktif.")
+                send_alert("✅ Huginn API connection restored. Monitoring is active.")
                 api_down_alerted = False
             
-            # API Donma/Gecikme Kontrolü (Lag Detection)
+            # API Lag Detection
             if current_height is not None and val_api_data.get("api_block_height") is not None:
                 api_height = val_api_data["api_block_height"]
                 lag = current_height - api_height
                 if lag > API_LAG_THRESHOLD:
-                    if time.time() - last_api_lag_alert_time > 3600:  # Saatte bir kez uyar
-                        send_alert(f"⏳ **HUGINN API DONMA UYARISI** ⏳\nHuginn API senin node'undan `{lag:,}` blok geride kalmış!\nDelege ve ödül verileri şu an güncel olmayabilir, panik yapma ama aklında bulunsun.")
+                    if time.time() - last_api_lag_alert_time > 3600:  # Alert once per hour
+                        send_alert(f"⏳ **HUGINN API LAG WARNING** ⏳\nHuginn API is lagging `{lag:,}` blocks behind your local node!\nDelegation and reward metrics might not be up-to-date right now.")
                         last_api_lag_alert_time = time.time()
 
             # --- STAKE ALERTS ---
@@ -480,7 +528,7 @@ def main():
                 stuck_counter = 0 
 
             if time.time() - last_report_time > AUTO_REPORT_INTERVAL:
-                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_api_data)
+                msg = create_status_message(current_height, current_tps, current_gas_sec, current_base_fee, current_block_time_ms, cpu, ram, disk_str, disk_io_str, temp_str, nvme_str, monad_details, val_api_data)
                 send_message(TELEGRAM_CHAT_ID, "⏰ *AUTOMATIC REPORT*\n\n" + msg)
                 last_report_time = time.time()
             
