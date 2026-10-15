@@ -44,6 +44,7 @@ last_io_time = 0
 # Block Time Tracking variables
 last_block_time_check = 0
 last_block_height_for_time = 0
+last_calculated_block_time_ms = 0.0
 
 # Session Tracking
 initial_rewards = None
@@ -220,7 +221,7 @@ def get_validator_api_details():
         return None
 
 def get_eth_block_details():
-    global last_block_time_check, last_block_height_for_time
+    global last_block_time_check, last_block_height_for_time, last_calculated_block_time_ms
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 1}
     try:
         response = requests.post(NODE_RPC_URL, json=payload, timeout=2)
@@ -231,14 +232,17 @@ def get_eth_block_details():
             height = int(block["number"], 16)
             
             current_time = time.time()
-            block_time_ms = 0.0
             if last_block_height_for_time != 0 and height > last_block_height_for_time:
                 blocks_diff = height - last_block_height_for_time
                 time_diff = current_time - last_block_time_check
-                block_time_ms = (time_diff / blocks_diff) * 1000
-            
-            last_block_time_check = current_time
-            last_block_height_for_time = height
+                last_calculated_block_time_ms = (time_diff / blocks_diff) * 1000
+                last_block_time_check = current_time
+                last_block_height_for_time = height
+            elif last_block_height_for_time == 0:
+                last_block_time_check = current_time
+                last_block_height_for_time = height
+
+            block_time_ms = last_calculated_block_time_ms
 
             # Dynamic block/sec calculation (fallback to Monad target ~3.33 block/s if not yet computed)
             if block_time_ms > 0:
@@ -364,7 +368,7 @@ def create_status_message():
         f"🧠 *CPU:* `{cpu}%` | 💾 *RAM:* `{ram}%`\n"
         f"🌡️ *Temp (Gen):* `{temp_str}`\n"
         + nvme_section +
-        "💽 *OS Disk:* `{disk_str}`\n"
+        f"💽 *OS Disk:* `{disk_str}`\n"
         f"⚙️ *Disk I/O:* `{disk_io_str}`\n"
         f"🗄️ *TrieDB:* `{triedb_str}`\n"
         f"⏳ *Bot Uptime:* `{uptime}`\n"
