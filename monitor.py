@@ -244,7 +244,6 @@ def get_eth_block_details():
 
             block_time_ms = last_calculated_block_time_ms
 
-            # Dynamic block/sec calculation (fallback to Monad target ~3.33 block/s if not yet computed)
             if block_time_ms > 0:
                 blocks_per_sec = 1000.0 / block_time_ms
             else:
@@ -377,6 +376,19 @@ def create_status_message():
     )
     return msg
 
+def heartbeat_sender():
+    """ Heartbeat Server'a düzenli olarak 'Hayattayım' sinyali atar """
+    print("💓 [INFO] Heartbeat Ping Thread started...")
+    url = f"{WATCHDOG_SERVER_IP.rstrip('/')}/ping"
+    while True:
+        try:
+            if WATCHDOG_SERVER_IP and "http" in WATCHDOG_SERVER_IP:
+                requests.get(url, timeout=4)
+                requests.post(url, timeout=4)
+        except Exception:
+            pass
+        time.sleep(15)
+
 def monitor_logs():
     global missed_block_counter
     print("🥷 [INFO] Ninja Log Reader started...")
@@ -449,6 +461,10 @@ def main():
     # Start Telegram Poller Thread
     tele_thread = threading.Thread(target=telegram_poller, daemon=True)
     tele_thread.start()
+
+    # Start Heartbeat Ping Thread
+    heartbeat_thread = threading.Thread(target=heartbeat_sender, daemon=True)
+    heartbeat_thread.start()
     
     last_height = 0
     stuck_counter = 0
